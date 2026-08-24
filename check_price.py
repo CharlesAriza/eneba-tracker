@@ -38,9 +38,29 @@ PRODUCTOS_FILE = AQUI / "productos.json"
 STATE_FILE = AQUI / "state.json"
 HISTORIAL_FILE = AQUI / "historial.json"
 
+
+def env_num(nombre, defecto, tipo=float):
+    """Lee una variable de entorno numerica tratando la cadena vacia como si
+    no estuviera.
+
+    Hace falta porque GitHub Actions inyecta las variables inexistentes como
+    cadena vacia, no las omite: un `${{ vars.X }}` no definido llega como
+    UMBRAL_BAJADA_PCT="" y float("") lanza ValueError. Tambien perdona un
+    valor mal escrito en vez de tumbar la ejecucion entera.
+    """
+    bruto = (os.environ.get(nombre) or "").strip()
+    if not bruto:
+        return defecto
+    try:
+        return tipo(bruto)
+    except ValueError:
+        print("Aviso: %s='%s' no es un numero valido, uso %s."
+              % (nombre, bruto, defecto))
+        return defecto
+
 # Tope de paginas a recorrer. Hoy hay 2 (34 resultados); el margen evita
 # quedarse corto si Eneba anade denominaciones.
-MAX_PAGINAS = int(os.environ.get("ENEBA_MAX_PAGINAS", "5"))
+MAX_PAGINAS = env_num("ENEBA_MAX_PAGINAS", 5, int)
 
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
@@ -56,13 +76,13 @@ NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 # baratas, donde un 1,5% son 2 centimos.
 # El 1,5% por defecto sale de lo observado entre ejecuciones consecutivas del
 # 24-08-2026: los movimientos normales rondaban el 0,8%. Ajustable.
-UMBRAL_BAJADA_PCT = float(os.environ.get("UMBRAL_BAJADA_PCT", "1.5"))
-UMBRAL_BAJADA_EUR = float(os.environ.get("UMBRAL_BAJADA_EUR", "0.10"))
+UMBRAL_BAJADA_PCT = env_num("UMBRAL_BAJADA_PCT", 1.5)
+UMBRAL_BAJADA_EUR = env_num("UMBRAL_BAJADA_EUR", 0.10)
 
 # Opcional: avisa tambien si el ratio (unidades por euro) llega a este valor.
 # OJO: calibralo con los valores que ve el runner de GitHub, no con los que
 # ves tu desde Espana (ver el aviso de "precio orientativo").
-RATIO_OBJETIVO = float(os.environ.get("RATIO_OBJETIVO", "0") or 0)
+RATIO_OBJETIVO = env_num("RATIO_OBJETIVO", 0.0)
 
 # Diferencias menores a esto se consideran "igual" (ruido de redondeo).
 EPSILON = 0.005
@@ -70,7 +90,7 @@ EPSILON = 0.005
 VENTANA_RESUMEN_HORAS = 24  # ventana que resume el push diario
 # El historico se guarda 30 dias, no 24h: hace falta para el minimo historico
 # (mejora 5), el grafico (mejora 2) y el panel web (mejora 6).
-RETENCION_DIAS = int(os.environ.get("RETENCION_DIAS", "30"))
+RETENCION_DIAS = env_num("RETENCION_DIAS", 30, int)
 
 # Se manda el resumen a partir de 23.5h en vez de 24h clavadas: con el cron
 # horario, exigir 24h haria que la hora del resumen se fuese corriendo un poco
