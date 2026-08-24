@@ -1,5 +1,7 @@
 # Eneba Steam Wallet (HKD) Price Tracker
 
+**📊 Panel en vivo: https://charlesariza.github.io/eneba-tracker/**
+
 Vigila el precio en euros de las tarjetas Steam Wallet de Hong Kong de
 100, 200 y 500 HKD en Eneba, y te avisa por push (ntfy.sh) cuando el
 precio baja respecto a la última comprobación.
@@ -56,6 +58,10 @@ estado, su propio histórico y su propio gráfico.
 `index.html` es una página estática sin frameworks que lee `historial.json`,
 `state.json` y `productos.json` del propio repositorio y dibuja la evolución
 de precios y ratios, más el catálogo completo ordenado por ratio.
+
+Está publicada en GitHub Pages (rama `main`, carpeta raíz):
+**https://charlesariza.github.io/eneba-tracker/** — se actualiza sola cada vez
+que el workflow commitea un nuevo `historial.json`.
 
 Para verla en local **hace falta servirla por HTTP** (abrir el archivo
 directamente no funciona: el navegador bloquea el `fetch` en `file://`):
@@ -192,3 +198,14 @@ saturar Eneba. Dos avisos de GitHub:
   tres dan el mismo precio. Por eso las notificaciones llevan el aviso
   "precio orientativo, verificar en Eneba antes de comprar". La detección
   de bajadas sigue siendo válida porque compara runner contra runner.
+
+## Nota sobre el topic de ntfy
+
+El topic en uso **no está escrito en ningún archivo de este repositorio**:
+vive solo en el secreto `NTFY_TOPIC` de Actions, que GitHub no expone ni
+siquiera a su propietario por API.
+
+Los topics que aparecen en el historial de git de este repo fueron rotados el
+2026-08-24, antes de hacerlo público, y ya no reciben nada. Se rotaron en vez
+de borrarlos porque borrar un dato de un archivo no lo quita de los commits
+donde se añadió.
