@@ -9,6 +9,145 @@ Repo: https://github.com/CharlesAriza/eneba-tracker (privado)
 
 ---
 
+## Entrada 011 — 2026-08-24 — Puntos 1 y 2 hechos. El repo NO se ha hecho público
+
+**Estado:** puntos 1 y 2 implementados y verificados **en CI**, no solo en
+local. **Los puntos 3 y 4 están parados**: la auditoría previa que pedía el
+propio punto 3 encontró que la premisa de la aprobación del usuario es falsa.
+
+### 🔴 El topic de ntfy SÍ se expondría
+
+La orden decía: *"El topic de ntfy no se expone (vive en un secreto de
+Actions)"*. Eso es cierto para el workflow y para los logs, **pero no para el
+repositorio**: el topic está escrito en `PARA-PM.md`, que está commiteado.
+
+```
+PARA-PM.md:627:  <topic-rotado-2>
+PARA-PM.md:635:  Si ves esto, el topic <topic-rotado-2> funciona. [...]
+PARA-PM.md:720:  Topic usado: `<topic-rotado-1>`
+  ... y 6 apariciones mas
+```
+
+Y peor: **también está en el historial de git**, así que borrarlo del archivo
+no bastaría. Hacer público el repo publica todos los commits:
+
+```
+COMMIT 4ae23cc  +<topic-rotado-2>
+COMMIT 58bcc1b  +Push enviado a https://ntfy.sh/<topic-rotado-1>
+```
+
+**Por qué importa:** en ntfy.sh los topics son abiertos también para
+*escribir*. Quien lea el repo no solo podría suscribirse y ver los precios
+(daño menor); podría **mandarle notificaciones falsas al móvil del usuario**,
+por ejemplo un "bajada del 40%" con un enlace a donde quiera.
+
+**Aclaración de un error previo:** en la entrada 010 se afirmó que el topic no
+quedaría expuesto porque vive en un secreto. Esa afirmación era incorrecta:
+solo cubría el workflow, no el registro. La aprobación del usuario se dio
+sobre esa información equivocada, así que el cambio de visibilidad **no se ha
+ejecutado** a la espera de que decida con los datos correctos.
+
+### Otras cosas que también quedarían públicas
+
+| Dato | Dónde | Gravedad |
+|---|---|---|
+| Topic de ntfy (actual y anterior) | `PARA-PM.md` + historial | **Alta**: cualquiera puede escribir en él |
+| `albertcharlesariza@gmail.com` | Autor de todos los commits | Media: queda indexable |
+| Usuario de Windows `pepo1` | Rutas en `PARA-PM.md` | Baja |
+
+No se encontraron tokens, claves ni contraseñas. El secreto `NTFY_TOPIC` de
+Actions sí está a salvo: GitHub no lo expone al cambiar la visibilidad.
+
+### Opción recomendada
+
+**Rotar el topic antes de publicar.** Un topic nuevo y aleatorio, actualizar
+el secreto, y el que quede en el historial pasa a ser un topic muerto que no
+recibe nada. Es la única solución limpia sin reescribir el historial de git.
+
+Coste para el usuario: volver a suscribirse en la app del móvil. Si no lo
+hace, dejaría de recibir avisos sin enterarse.
+
+Alternativas: publicar tal cual asumiendo el riesgo, o dejar el repo privado y
+seguir viendo el panel en local con `python -m http.server`.
+
+### ✅ Punto 1 — el PNG solo se commitea con el resumen
+
+`check_price.py` publica `resumen_enviado` por `GITHUB_OUTPUT`; el workflow
+genera y commitea el gráfico solo cuando vale `true`.
+
+Verificado **en CI, los dos caminos**, no solo en local:
+
+Ejecución normal (run 32779799230):
+```
+Salida para el workflow: resumen_enviado=false
+Sin resumen en esta ejecucion: no commiteo el grafico.
+[main 3795e31] Actualizar estado, historial y grafico [skip ci]
+ 2 files changed
+```
+
+Ejecución con resumen forzado (run 32780021845):
+```
+Toca resumen (25.0 h desde el ultimo). Enviando.
+Push enviado a https://ntfy.sh/***
+Salida para el workflow: resumen_enviado=true
+steam-hk -> historial-steam-hk.png (9 muestras, 1.6 h)
+Toco resumen: incluyo tambien el grafico.
+[main 84b1110] Actualizar estado, historial y grafico [skip ci]
+ 3 files changed
+```
+
+**2 archivos** sin resumen, **3** con resumen. El ahorro pasa de ~1 GB al año
+a ~42 MB.
+
+### ✅ Punto 2 — el mínimo histórico dispara por sí solo
+
+Probado con dos escenarios donde **la bajada es idéntica (0,5 %, por debajo
+del umbral del 1,5 %)** y lo único que cambia es el mínimo histórico:
+
+**Caso A** — histórico un 2 % por encima, el precio actual marca mínimo:
+```
+100 HKD -> 10.58 EUR [baja 0.05 desde 10.63 (bajo umbral 0.16)]
+           📉 Precio mas bajo visto en 16 horas
+--- cuerpo que se habria enviado ---   <- PUSH ENVIADO
+```
+
+**Caso B** — histórico un 5 % por debajo, no hay mínimo:
+```
+100 HKD -> 10.58 EUR [baja 0.05 desde 10.63 (bajo umbral 0.16)]
+Sin bajadas por encima del umbral. No envio alerta.   <- SIN PUSH
+```
+
+**Dos frenos añadidos** para que la mejora no se convierta en spam:
+
+1. **Mínimo de 6 muestras** (`MIN_MUESTRAS_HISTORICO`). Un "mínimo histórico"
+   calculado sobre una sola lectura se cumple siempre y no significa nada: sin
+   este freno, las primeras horas del tracker habrían disparado push cada vez.
+2. **Solo al marcar un mínimo nuevo, o al volver a él tras estar por encima.**
+   Sin esto, un precio plano en su mínimo cumpliría la condición *cada hora* e
+   inundaría el móvil.
+
+Ambos frenos son necesarios para que la funcionalidad sea usable; sin ellos,
+"iguala o supera el mínimo" se cumple continuamente.
+
+### Bloqueos
+
+- **Decisión del usuario sobre el topic** antes de hacer público el repo.
+  Puntos 3 y 4 congelados hasta entonces.
+
+### Pendiente
+
+- Devolver el cron a `0 */2 * * *` cuando termine la fase de prueba.
+
+### Concepto enseñado
+
+Antes de publicar algo, se revisa el **historial**, no solo los archivos
+actuales. En git, borrar un dato de un archivo no lo borra del repositorio:
+sigue en el commit donde se añadió, y hacer público el repo publica todos los
+commits. Por eso, cuando un secreto se filtra, la respuesta correcta casi
+siempre es rotarlo, no borrarlo.
+
+---
+
 ## Entrada 010 — 2026-08-24 — Las 6 mejoras implementadas y verificadas en CI
 
 **Estado:** las 6 implementadas, probadas y en `main`. Commits `2cb8cda` y
@@ -545,7 +684,7 @@ inventarse un precio que nadie ha visto.
 solo en GitHub Actions cada 2 horas.
 
 **Pendiente de confirmar por el usuario:** que el push del run 32757200120 le
-llegó al móvil en el topic nuevo (`eneba-hkd-1e22f7yall`).
+llegó al móvil en el topic nuevo (`<topic-rotado-2>`).
 
 ### Bloqueos
 
@@ -595,7 +734,7 @@ Claude Code ni manejar un token en su nombre.
 - `state.json` commiteado con los precios +2 € a propósito, para que la
   primera ejecución del workflow valide push y commit automático (ver
   entrada 005).
-- Topic `eneba-hkd-1e22f7yall` operativo y confirmado.
+- Topic `<topic-rotado-2>` operativo y confirmado.
 
 En cuanto haya login, los 6 pasos restantes se encadenan sin más decisiones
 pendientes.
@@ -620,11 +759,11 @@ Eneba → extracción → comparación → ntfy → móvil.
 
 ### Topic cambiado (decisión del usuario)
 
-El usuario optó por sustituir `eneba-hkd-checker` por uno con sufijo
+El usuario optó por sustituir `<topic-rotado-1>` por uno con sufijo
 aleatorio. Nuevo topic:
 
 ```
-eneba-hkd-1e22f7yall
+<topic-rotado-2>
 ```
 
 Generado con `secrets.choice` (aleatorio criptográfico, no `random`). Se le
@@ -632,7 +771,7 @@ mandó un push de prueba y **está confirmado en el servidor de ntfy**:
 
 ```
 title='Topic nuevo activo'
-Si ves esto, el topic eneba-hkd-1e22f7yall funciona. [...]
+Si ves esto, el topic <topic-rotado-2> funciona. [...]
 ```
 
 Pendiente: que el usuario se suscriba al nuevo en la app y borre el antiguo.
@@ -694,7 +833,7 @@ esté autenticado.
 
 ### Siguiente paso
 
-Usuario: suscribirse a `eneba-hkd-1e22f7yall` en ntfy y ejecutar
+Usuario: suscribirse a `<topic-rotado-2>` en ntfy y ejecutar
 `gh auth login`. Después, Claude Code encadena: `gh repo create` privado +
 push + `gh secret set NTFY_TOPIC` + `gh workflow run` + lectura del log.
 
@@ -717,7 +856,7 @@ avanzar).
 
 ### Paso 1 — ejecución de la prueba: OK
 
-Topic usado: `eneba-hkd-checker`.
+Topic usado: `<topic-rotado-1>`.
 
 Estado falseado (+2 € sobre los precios reales) y ejecución:
 
@@ -725,7 +864,7 @@ Estado falseado (+2 € sobre los precios reales) y ejecución:
 100 HKD -> 10.58 EUR (9.45 HKD/EUR) [BAJA desde 12.58]
 200 HKD -> 21.06 EUR (9.50 HKD/EUR) [BAJA desde 23.06]
 500 HKD -> 52.82 EUR (9.47 HKD/EUR) [BAJA desde 54.82]
-Push enviado a https://ntfy.sh/eneba-hkd-checker
+Push enviado a https://ntfy.sh/<topic-rotado-1>
 exit=0
 ```
 
@@ -763,7 +902,7 @@ así que no se ha creado el repo, ni subido nada, ni configurado el secreto.
 
 ### Observación de seguridad
 
-El topic `eneba-hkd-checker` es fácil de adivinar. En ntfy.sh cualquiera que
+El topic `<topic-rotado-1>` es fácil de adivinar. En ntfy.sh cualquiera que
 acierte el nombre puede suscribirse (vería solo precios públicos, poco daño)
 y **también publicar en él**, es decir, mandarle notificaciones falsas al
 usuario. No bloquea nada; el usuario decide si lo cambia por algo con sufijo
@@ -1015,3 +1154,18 @@ Si llega el push → subir a GitHub y configurar el secreto `NTFY_TOPIC`.
 Antes de escribir un scraper se mira si los datos están en el HTML crudo
 (`curl` + `grep`). Eso decide si hace falta un navegador entero o basta una
 petición simple, y cambia por completo el coste y la fragilidad del proyecto.
+
+---
+
+## Nota sobre los topics de ntfy en este registro
+
+Los nombres de topic que aparecian en las entradas antiguas se han sustituido
+por marcadores. Esos topics fueron **rotados el 2026-08-24 antes de hacer
+publico el repositorio** y ya no reciben nada.
+
+Siguen visibles en el historial de git (borrarlos de un archivo no los borra
+de los commits donde se anadieron), por eso se rotaron en vez de solo
+borrarlos: un topic muerto expuesto no hace dano.
+
+**El topic en uso no esta escrito en ningun archivo de este repositorio.**
+Vive unicamente en el secreto `NTFY_TOPIC` de Actions, que GitHub no expone.
