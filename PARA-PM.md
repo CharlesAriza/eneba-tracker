@@ -5,7 +5,98 @@ Registro de salidas de Claude Code para el chat de Claude que hace de
 hizo, qué está verificado, qué NO está verificado y qué bloquea el avance.
 
 Proyecto: `C:\Users\pepo1\Documents\Eneba Checker`
-Repo: https://github.com/CharlesAriza/eneba-tracker (privado)
+Repo: https://github.com/CharlesAriza/eneba-tracker (**público** desde 2026-08-24)
+Panel: https://charlesariza.github.io/eneba-tracker/
+
+---
+
+## Entrada 012 — 2026-08-24 — Topic rotado, repo público y panel publicado
+
+**Estado:** los 4 puntos completados. El sistema está publicado y funcionando.
+
+**Panel en vivo: https://charlesariza.github.io/eneba-tracker/**
+
+### Punto 3 — rotación previa y cambio de visibilidad
+
+El usuario eligió **rotar el topic antes de publicar**, tras conocer que el
+anterior estaba en el historial de git (ver entrada 011).
+
+Ejecutado en este orden, que importa:
+
+1. Topic nuevo generado con `secrets.choice` (aleatorio criptográfico).
+2. Secreto `NTFY_TOPIC` actualizado con `gh secret set`.
+3. Push de prueba al topic nuevo: HTTP 200.
+4. `PARA-PM.md` limpiado: 14 apariciones de los topics antiguos sustituidas
+   por marcadores.
+5. **Comprobado que el topic nuevo no aparece en ningún archivo del repo.**
+   Esta verificación es el punto clave de toda la operación: si el topic nuevo
+   se hubiera colado en un archivo, la rotación no habría servido de nada.
+6. Commit y push.
+7. `gh repo edit --visibility public`.
+
+Confirmado: `privado=false | visibilidad=PUBLIC`.
+
+**El topic en uso no está en ningún archivo del repositorio.** Vive solo en el
+secreto de Actions. Los que quedan en el historial son topics muertos.
+
+### El secreto sigue protegido — comprobado, no supuesto
+
+```
+gh secret list                    -> NTFY_TOPIC (existe)
+gh api .../secrets/NTFY_TOPIC     -> campos: name, created_at, updated_at
+                                     contiene el valor? False
+curl sin autenticar .../secrets   -> HTTP 401
+```
+
+GitHub no devuelve el valor del secreto ni al propietario autenticado, y un
+visitante anónimo del repo público recibe 401. En los logs sale como `***`.
+
+### Punto 4 — Pages publicado y verificado
+
+Activado sobre `main` / raíz, que es lo más simple porque `index.html` y los
+JSON que lee están todos ahí: no hizo falta mover nada a `/docs`.
+
+Esperado a que terminara la construcción (`building` → `built`) y comprobado
+que **carga datos reales**, no solo que responda 200:
+
+```
+Steam Wallet Hong Kong · última lectura: 2026-08-24 21:32 UTC · 9 muestras
+100 HKD  11.13 €  8.98 HKD/€ · min 10.58 · max 11.13
+200 HKD  22.34 €  8.95 HKD/€ · min 21.23 · max 22.34
+500 HKD  55.23 €  9.05 HKD/€ · min 52.80 · max 55.23
+Mejor ratio del catálogo: 50 HKD — 9.19 HKD/€ · 34 comparadas
+```
+
+Sin errores de consola. Los gráficos SVG y la tabla de las 34 denominaciones
+se dibujan correctamente. URL añadida al README.
+
+Nótese que el panel muestra los precios del runner (11,13 €), no los de
+España (10,58 €): es coherente con el aviso de precio orientativo que lleva
+la propia página.
+
+### Requisito de acción del usuario
+
+**Suscribirse al topic nuevo en la app ntfy y borrar la suscripción
+anterior.** El nombre se le comunicó por chat y **no se escribe aquí**: este
+registro es público. Hasta que lo haga, el tracker sigue funcionando y
+mandando avisos, pero a un topic al que nadie escucha: dejaría de recibir
+alertas sin ningún síntoma visible.
+
+*(Nota: al redactar esta entrada el topic nuevo se escribió por error en este
+archivo y se retiró antes de commitear. Queda anotado porque ilustra
+exactamente el riesgo descrito abajo.)*
+
+### Pendiente
+
+- Devolver el cron a `0 */2 * * *` cuando el usuario dé por terminada la fase
+  de prueba. Sigue marcado como TEMPORAL en el YAML y en el README.
+
+### Concepto enseñado
+
+Al rotar un secreto, el paso que de verdad decide si la operación sirve no es
+generar el nuevo: es **verificar que el nuevo no ha acabado escrito donde
+estaba el viejo**. Rotar y volver a filtrar en el mismo sitio es un patrón
+muy común, y por eso la comprobación se hizo explícita antes de publicar.
 
 ---
 
