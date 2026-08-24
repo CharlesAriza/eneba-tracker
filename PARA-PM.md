@@ -10,6 +10,134 @@ Panel: https://charlesariza.github.io/eneba-tracker/
 
 ---
 
+## Entrada 013 — 2026-08-25 — El panel es instalable como PWA con icono propio
+
+**Estado:** completado y verificado en la URL pública. Commits `dade8db` y el
+del README.
+
+### Diseño del icono
+
+Se eligió **la línea descendente del propio panel**: una bajada de precio es
+la buena noticia que persigue todo el proyecto, así que el icono dice lo que
+hace la app. Sobre el fondo oscuro del tema, con degradado vertical
+(`#22304a` → `#0e1218`), la línea en el azul de acento (`#5aa9e6`) y el punto
+final en el verde de los gráficos (`#35c46a`). Detrás, un símbolo del euro
+como marca de agua al 12 % para dar identidad sin robar legibilidad.
+
+La línea **no es recta**: tiene un repunte intermedio. Una línea recta
+descendente se lee como un icono de "menos" o de error, no como un gráfico.
+
+Colores tomados del `index.html` existente, no inventados: son las mismas
+variables que ya usaba el panel.
+
+### Tres decisiones que no son evidentes
+
+**1. Imágenes a sangre, sin esquinas redondeadas propias.** iOS y Android
+aplican su propia máscara al icono. Redondearlo aquí produciría un doble
+redondeado con bordes sucios.
+
+**2. Versión `maskable` aparte, con el dibujo al 78 %.** Android recorta los
+iconos maskable (en círculo, en "squircle", según el lanzador) y solo garantiza
+el 80 % central. Con el dibujo a tamaño completo, **el punto verde se salía y
+el recorte se lo habría comido**. Comprobado midiendo píxeles del PNG, no a
+ojo:
+
+```
+radio maximo del dibujo: 195.0 px (zona segura: 204.8 px)
+pixeles fuera de la zona segura: 0
+VEREDICTO: OK, cabe en el recorte circular
+```
+
+**3. Dos `theme-color` con media query.** El manifest solo admite un color, y
+el panel tiene tema claro y oscuro. Con uno solo, en tema claro quedaría una
+franja oscura sobre una página clara. Con las media queries, la barra de
+estado sigue al tema del sistema.
+
+También se añadió `viewport-fit=cover` + `env(safe-area-inset-*)`: en
+standalone no hay barra del navegador que separe del notch ni de la barra de
+gestos.
+
+### Sin service worker, a propósito
+
+No hace falta para "Añadir a pantalla de inicio": eso funciona solo con el
+manifest, y es lo que pedía el objetivo. Un service worker añadiría una capa
+de caché que **podría servir precios viejos**, justo lo contrario de lo que
+busca el panel. Si en el futuro se quisiera el aviso automático de instalación
+de Chrome (`beforeinstallprompt`) sí haría falta, y habría que excluir
+explícitamente del caché los `.json`.
+
+### Archivos añadidos
+
+| Archivo | Qué es |
+|---|---|
+| `iconos.py` | Generador (se ejecuta a mano, no en el workflow) |
+| `icons/icon-192.png` | 192×192, `any` |
+| `icons/icon-512.png` | 512×512, `any` |
+| `icons/icon-512-maskable.png` | 512×512, `maskable`, dibujo al 78 % |
+| `icons/apple-touch-icon-180.png` | 180×180 para iOS |
+| `icons/icon.svg` | Vectorial, para la pestaña del navegador |
+| `manifest.json` | `display: standalone`, colores y los 4 iconos |
+
+`index.html`: `<link rel="manifest">`, `apple-touch-icon`, favicons, metas de
+tema y de iOS, y márgenes de zona segura.
+
+### Verificación en la URL pública
+
+Todos los recursos responden con el tipo MIME correcto:
+
+```
+manifest.json               -> 200 | application/json     |   932 bytes
+icons/icon-192.png          -> 200 | image/png            |  7958 bytes
+icons/icon-512.png          -> 200 | image/png            | 19837 bytes
+icons/icon-512-maskable.png -> 200 | image/png            | 16279 bytes
+icons/apple-touch-icon-180  -> 200 | image/png            |  7547 bytes
+icons/icon.svg              -> 200 | image/svg+xml        |   835 bytes
+```
+
+Y desde la propia página publicada, resolviendo el manifest como lo haría el
+navegador:
+
+```
+manifest: https://charlesariza.github.io/eneba-tracker/manifest.json
+iconos:   192x192 any -> 200 | 512x512 any -> 200
+          512x512 maskable -> 200 | any any -> 200
+criterios: https OK | manifest OK | nombre OK | display standalone OK
+           icono192 OK | icono512 OK | maskable OK | start_url OK
+```
+
+El panel sigue cargando datos reales y sin errores de consola tras los
+cambios de CSS.
+
+**Matiz honesto sobre la comprobación:** no se pudo ejecutar Lighthouse ni
+abrir el panel Application de Chrome desde aquí. Lo que se hizo fue
+**comprobar uno a uno los criterios que Chrome usa** para considerar una
+página instalable, resolviendo el manifest y los iconos desde la página
+publicada. Es una verificación equivalente en cobertura, pero no es la
+herramienta que se pedía; conviene que el usuario lo confirme en su móvil.
+
+### Aviso para el usuario
+
+Tras el despliegue hay que **volver a "Añadir a pantalla de inicio"**. Si ya
+existía un atajo creado antes, **el icono no se actualiza solo**: hay que
+borrarlo y crearlo de nuevo.
+
+### Pendiente
+
+- Devolver el cron a `0 */2 * * *` cuando el usuario dé por terminada la fase
+  de prueba. Sigue marcado como TEMPORAL.
+- Suscribirse al topic rotado en la app ntfy, si aún no se ha hecho (entrada
+  012).
+
+### Concepto enseñado
+
+Un icono de app no se diseña solo para verse bien en el archivo: se diseña
+para sobrevivir al recorte que le aplica cada sistema. Por eso existen los
+iconos "maskable" y la zona segura del 80 %, y por eso la comprobación
+correcta no es mirar el PNG, sino medir si el dibujo cabe dentro de ese
+círculo.
+
+---
+
 ## Entrada 012 — 2026-08-24 — Topic rotado, repo público y panel publicado
 
 **Estado:** los 4 puntos completados. El sistema está publicado y funcionando.
