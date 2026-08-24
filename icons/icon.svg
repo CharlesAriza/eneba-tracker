@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="f" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22304a"/>
+      <stop offset="1" stop-color="#0e1218"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#f)"/>
+  <text x="256" y="266" font-family="Segoe UI, Arial, sans-serif" font-weight="700"
+        font-size="317" fill="#ffffff" fill-opacity="0.11"
+        text-anchor="middle" dominant-baseline="central">&#8364;</text>
+  <polyline points="76.8,169 169,230 241,200 322,307 435,374"
+            fill="none" stroke="#5aa9e6" stroke-width="38"
+            stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="435" cy="374" r="54" fill="#0e1218"/>
+  <circle cx="435" cy="374" r="37" fill="#35c46a"/>
+</svg>
