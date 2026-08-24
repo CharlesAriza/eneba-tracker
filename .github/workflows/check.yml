@@ -1,0 +1,54 @@
+name: Check Eneba price
+
+on:
+  schedule:
+    # Cada 2 horas. Ojo: GitHub no garantiza la puntualidad de los cron,
+    # puede retrasarse bastantes minutos si hay cola.
+    - cron: "0 */2 * * *"
+  workflow_dispatch: # permite lanzarlo a mano desde la pestaña Actions
+
+# Necesario para que el bot pueda commitear state.json de vuelta al repo.
+permissions:
+  contents: write
+
+# Si una ejecucion se solapa con otra, deja terminar la anterior.
+concurrency:
+  group: eneba-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Comprobar precios
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          # Opcional: crea la variable RATIO_OBJETIVO en Settings > Variables
+          # si quieres un aviso extra al alcanzar cierto ratio HKD/EUR.
+          RATIO_OBJETIVO: ${{ vars.RATIO_OBJETIVO }}
+        run: python check_price.py
+
+      - name: Guardar el estado en el repo
+        if: always() # tambien commitea el flag de fallo si el scraping se rompio
+        run: |
+          if [[ -n "$(git status --porcelain state.json)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add state.json
+            git commit -m "Actualizar state.json [skip ci]"
+            git push
+          else
+            echo "state.json sin cambios, no hay nada que commitear."
+          fi
