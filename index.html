@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eneba Price Tracker</title>
+<style>
+  :root {
+    --fondo: #f7f8fa;
+    --tarjeta: #ffffff;
+    --texto: #1a1d21;
+    --suave: #5b636e;
+    --borde: #e2e5ea;
+    --rejilla: #e8ebf0;
+    --acento: #1f77b4;
+    --aviso-fondo: #fff6e5;
+    --aviso-borde: #f0c98a;
+    --aviso-texto: #6b4a10;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo: #14171c;
+      --tarjeta: #1c2028;
+      --texto: #e8eaed;
+      --suave: #9aa3b0;
+      --borde: #2b313b;
+      --rejilla: #262c35;
+      --acento: #5aa9e6;
+      --aviso-fondo: #2d2513;
+      --aviso-borde: #6b5220;
+      --aviso-texto: #f0cd8a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 48px;
+    background: var(--fondo); color: var(--texto);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .envoltorio { max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 32px 0 12px; font-weight: 600; }
+  .meta { color: var(--suave); font-size: .875rem; margin: 0 0 20px; }
+  .aviso {
+    background: var(--aviso-fondo); border: 1px solid var(--aviso-borde);
+    color: var(--aviso-texto); border-radius: 10px;
+    padding: 10px 14px; font-size: .875rem; margin: 0 0 24px;
+  }
+  .rejilla {
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  }
+  .tarjeta {
+    background: var(--tarjeta); border: 1px solid var(--borde);
+    border-radius: 12px; padding: 14px 16px;
+  }
+  .tarjeta .etiqueta { color: var(--suave); font-size: .8rem; }
+  .tarjeta .valor { font-size: 1.6rem; font-weight: 650; margin: 2px 0; }
+  .tarjeta .detalle { color: var(--suave); font-size: .8rem; }
+  .destacada { border-color: var(--acento); }
+  .controles { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; }
+  button {
+    font: inherit; font-size: .85rem; padding: 6px 14px; cursor: pointer;
+    background: var(--tarjeta); color: var(--texto);
+    border: 1px solid var(--borde); border-radius: 999px;
+  }
+  button[aria-pressed="true"] { border-color: var(--acento); color: var(--acento); font-weight: 600; }
+  .lienzo {
+    background: var(--tarjeta); border: 1px solid var(--borde);
+    border-radius: 12px; padding: 12px; overflow-x: auto;
+  }
+  svg { display: block; width: 100%; height: auto; }
+  .leyenda { display: flex; gap: 16px; flex-wrap: wrap; font-size: .8rem; color: var(--suave); padding: 8px 4px 0; }
+  .punto { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+  th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--borde); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--suave); font-weight: 600; }
+  footer { color: var(--suave); font-size: .8rem; margin-top: 36px; }
+  a { color: var(--acento); }
+  .error { color: #c0392b; }
+</style>
+</head>
+<body>
+<div class="envoltorio">
+  <h1>Eneba Price Tracker</h1>
+  <p class="meta" id="meta">Cargando datos…</p>
+
+  <div class="aviso">
+    <strong>Precios orientativos.</strong> Los mide un servidor de GitHub en
+    EE.UU. y van aproximadamente un 5&nbsp;% por encima de los que se ven desde
+    España. No es corregible: Eneba fija el precio por geolocalización de IP.
+    Sirven para detectar <em>cuándo</em> baja, no como cifra final. Verifica en
+    Eneba antes de comprar.
+  </div>
+
+  <div class="rejilla" id="tarjetas"></div>
+
+  <h2>Evolución</h2>
+  <div class="controles" id="rangos"></div>
+  <div class="lienzo">
+    <svg id="grafico-ratio" viewBox="0 0 900 300" role="img"
+         aria-label="Evolución del ratio HKD por euro"></svg>
+    <div class="leyenda" id="leyenda"></div>
+  </div>
+  <div class="lienzo" style="margin-top:12px">
+    <svg id="grafico-precio" viewBox="0 0 900 300" role="img"
+         aria-label="Evolución del precio en euros"></svg>
+  </div>
+
+  <h2>Catálogo completo</h2>
+  <div class="lienzo">
+    <table id="catalogo"><tbody></tbody></table>
+  </div>
+
+  <footer id="pie"></footer>
+</div>
+
+<script>
+const COLORES = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e"];
+const RANGOS = [
+  { etiqueta: "24 h", horas: 24 },
+  { etiqueta: "7 días", horas: 24 * 7 },
+  { etiqueta: "30 días", horas: 24 * 30 },
+];
+
+let datos = null;
+let rangoActivo = 24 * 7;
+
+const eur = n => n.toFixed(2) + " €";
+
+async function cargar() {
+  try {
+    const [hist, estado, prods] = await Promise.all([
+      fetch("historial.json").then(r => r.json()),
+      fetch("state.json").then(r => r.json()),
+      fetch("productos.json").then(r => r.json()),
+    ]);
+    const pid = prods.productos[0].id;
+    datos = {
+      pid,
+      producto: prods.productos[0],
+      muestras: (hist.productos?.[pid]?.muestras ?? []).sort((a, b) => a.t - b.t),
+      estado: estado.productos?.[pid] ?? {},
+    };
+    render();
+  } catch (e) {
+    document.getElementById("meta").innerHTML =
+      '<span class="error">No se pudieron cargar los datos: ' + e.message +
+      '. Esta página necesita servirse por HTTP (abrirla como archivo local no funciona).</span>';
+  }
+}
+
+function muestrasEnRango() {
+  if (!datos.muestras.length) return [];
+  const fin = datos.muestras[datos.muestras.length - 1].t;
+  return datos.muestras.filter(m => m.t >= fin - rangoActivo * 3600);
+}
+
+function render() {
+  const { producto, estado } = datos;
+  const unidad = producto.unidad || "";
+  const vigiladas = producto.denominaciones_vigiladas || [];
+  const muestras = muestrasEnRango();
+
+  const span = muestras.length > 1
+    ? (muestras[muestras.length - 1].t - muestras[0].t) / 3600 : 0;
+  document.getElementById("meta").textContent =
+    producto.nombre + " · última lectura: " + (estado.actualizado || "—") +
+    " · " + datos.muestras.length + " muestras guardadas · " +
+    "rango mostrado: " + span.toFixed(1) + " h";
+
+  // --- Tarjetas de estado actual ---
+  const cont = document.getElementById("tarjetas");
+  cont.innerHTML = "";
+  for (const d of vigiladas) {
+    const precio = estado.precios?.[d];
+    if (precio === undefined) continue;
+    const serie = muestras.filter(m => m.precios[d] !== undefined)
+                          .map(m => m.precios[d]);
+    const min = serie.length ? Math.min(...serie) : null;
+    const max = serie.length ? Math.max(...serie) : null;
+    const enlace = estado.enlaces?.[d];
+    cont.insertAdjacentHTML("beforeend", `
+      <div class="tarjeta">
+        <div class="etiqueta">${d} ${unidad}</div>
+        <div class="valor">${eur(precio)}</div>
+        <div class="detalle">${(d / precio).toFixed(2)} ${unidad}/€${
+          min !== null ? ` · min ${min.toFixed(2)} · max ${max.toFixed(2)}` : ""
+        }</div>
+        ${enlace ? `<div class="detalle"><a href="${enlace}" target="_blank" rel="noopener">Ver en Eneba</a></div>` : ""}
+      </div>`);
+  }
+
+  // --- Mejor tarjeta del catálogo ---
+  const todas = estado.todas || {};
+  const entradas = Object.entries(todas).map(([k, v]) => [Number(k), v]);
+  if (entradas.length) {
+    const [mejorD, mejorP] = entradas.reduce((a, b) => (a[0] / a[1] >= b[0] / b[1] ? a : b));
+    const enlace = estado.enlaces?.[mejorD];
+    cont.insertAdjacentHTML("beforeend", `
+      <div class="tarjeta destacada">
+        <div class="etiqueta">Mejor ratio del catálogo</div>
+        <div class="valor">${mejorD} ${unidad}</div>
+        <div class="detalle">${(mejorD / mejorP).toFixed(2)} ${unidad}/€ · ${eur(mejorP)}
+          · ${entradas.length} comparadas</div>
+        ${enlace ? `<div class="detalle"><a href="${enlace}" target="_blank" rel="noopener">Ver en Eneba</a></div>` : ""}
+      </div>`);
+  }
+
+  // --- Botones de rango ---
+  const rangos = document.getElementById("rangos");
+  rangos.innerHTML = "";
+  for (const r of RANGOS) {
+    const b = document.createElement("button");
+    b.textContent = r.etiqueta;
+    b.setAttribute("aria-pressed", String(r.horas === rangoActivo));
+    b.onclick = () => { rangoActivo = r.horas; render(); };
+    rangos.appendChild(b);
+  }
+
+  // --- Leyenda y gráficos ---
+  document.getElementById("leyenda").innerHTML = vigiladas.map((d, i) =>
+    `<span><span class="punto" style="background:${COLORES[i % COLORES.length]}"></span>${d} ${unidad}</span>`
+  ).join("");
+
+  dibujar("grafico-ratio", muestras, vigiladas,
+          (m, d) => d / m.precios[d], v => v.toFixed(2), unidad + "/€");
+  dibujar("grafico-precio", muestras, vigiladas,
+          (m, d) => m.precios[d], v => v.toFixed(2) + "€", "precio");
+
+  // --- Tabla del catálogo ---
+  const filas = entradas
+    .map(([d, p]) => ({ d, p, ratio: d / p }))
+    .sort((a, b) => b.ratio - a.ratio);
+  document.getElementById("catalogo").innerHTML =
+    `<thead><tr><th>Denominación</th><th>Precio</th><th>Ratio ${unidad}/€</th></tr></thead><tbody>` +
+    filas.map(f => {
+      const enlace = estado.enlaces?.[f.d];
+      const nombre = enlace
+        ? `<a href="${enlace}" target="_blank" rel="noopener">${f.d} ${unidad}</a>`
+        : `${f.d} ${unidad}`;
+      return `<tr><td>${nombre}</td><td>${eur(f.p)}</td><td>${f.ratio.toFixed(2)}</td></tr>`;
+    }).join("") + "</tbody>";
+
+  document.getElementById("pie").innerHTML =
+    'Datos generados por <code>check_price.py</code> y servidos como archivos ' +
+    'estáticos desde el propio repositorio. Sin backend ni base de datos.';
+}
+
+function dibujar(idSvg, muestras, denoms, valorDe, formato, titulo) {
+  const svg = document.getElementById(idSvg);
+  const W = 900, H = 300, ML = 58, MR = 14, MT = 16, MB = 38;
+
+  if (muestras.length < 2) {
+    svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle"
+      fill="currentColor" opacity=".55" font-size="14">
+      Aún no hay suficientes muestras en este rango</text>`;
+    return;
+  }
+
+  const series = denoms.map((d, i) => ({
+    d, color: COLORES[i % COLORES.length],
+    puntos: muestras.filter(m => m.precios[d] !== undefined)
+                    .map(m => ({ t: m.t, v: valorDe(m, d) })),
+  })).filter(s => s.puntos.length > 1);
+  if (!series.length) { svg.innerHTML = ""; return; }
+
+  const ts = series.flatMap(s => s.puntos.map(p => p.t));
+  const vs = series.flatMap(s => s.puntos.map(p => p.v));
+  const t0 = Math.min(...ts), t1 = Math.max(...ts);
+  let v0 = Math.min(...vs), v1 = Math.max(...vs);
+  const margen = (v1 - v0) * 0.12 || Math.abs(v1 * 0.02) || 1;
+  v0 -= margen; v1 += margen;
+
+  const x = t => ML + (t1 === t0 ? 0.5 : (t - t0) / (t1 - t0)) * (W - ML - MR);
+  const y = v => MT + (1 - (v - v0) / (v1 - v0)) * (H - MT - MB);
+
+  let out = "";
+  // Rejilla horizontal + etiquetas del eje Y
+  for (let i = 0; i <= 4; i++) {
+    const v = v0 + (v1 - v0) * i / 4, yy = y(v);
+    out += `<line x1="${ML}" y1="${yy}" x2="${W - MR}" y2="${yy}"
+             stroke="var(--rejilla)" stroke-width="1"/>`;
+    out += `<text x="${ML - 8}" y="${yy + 4}" text-anchor="end" font-size="11"
+             fill="currentColor" opacity=".6">${formato(v)}</text>`;
+  }
+  // Etiquetas del eje X
+  for (let i = 0; i <= 3; i++) {
+    const t = t0 + (t1 - t0) * i / 3;
+    const fecha = new Date(t * 1000);
+    const texto = (t1 - t0) > 86400 * 2
+      ? fecha.toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit" })
+      : fecha.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+    out += `<text x="${x(t)}" y="${H - 12}" text-anchor="middle" font-size="11"
+             fill="currentColor" opacity=".6">${texto}</text>`;
+  }
+  // Series
+  for (const s of series) {
+    const d = s.puntos.map((p, i) => (i ? "L" : "M") + x(p.t).toFixed(1) + " " + y(p.v).toFixed(1)).join(" ");
+    out += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2"
+             stroke-linejoin="round" stroke-linecap="round"/>`;
+    const ult = s.puntos[s.puntos.length - 1];
+    out += `<circle cx="${x(ult.t).toFixed(1)}" cy="${y(ult.v).toFixed(1)}" r="3.5" fill="${s.color}"/>`;
+  }
+  out += `<text x="${ML}" y="${MT - 2}" font-size="11" fill="currentColor"
+           opacity=".55">${titulo}</text>`;
+  svg.innerHTML = out;
+}
+
+cargar();
+</script>
+</body>
+</html>

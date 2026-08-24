@@ -1,18 +1,22 @@
 """
-Vigila el precio en euros de las tarjetas Steam Wallet de Hong Kong en Eneba.
+Vigila precios de tarjetas regalo en Eneba y avisa por push (ntfy.sh).
 
-Manda dos tipos de aviso por push (ntfy.sh):
-  - ALERTA: cuando baja el precio de 100, 200 o 500 HKD respecto a la
-    comprobacion anterior.
+Los productos a vigilar se declaran en productos.json, no aqui: para anadir
+uno nuevo no hace falta tocar este archivo.
+
+Manda dos tipos de aviso:
+  - ALERTA: cuando baja el precio de una denominacion vigilada MAS QUE EL
+    UMBRAL configurado (para no dar la lata por dos centimos).
   - RESUMEN: una vez al dia, con minimos y maximos de las ultimas 24h y la
-    tarjeta con mejor ratio de todo el catalogo.
+    tarjeta con mejor ratio de todo el catalogo del producto.
 
 Como funciona, en corto:
   1. Abre la pagina con un navegador de verdad (Playwright), porque Eneba
      pinta los precios con JavaScript: el HTML crudo viene vacio.
-  2. Recorre todas las paginas de resultados y saca TODAS las denominaciones.
+  2. Recorre todas las paginas de resultados y saca TODAS las denominaciones,
+     con su enlace directo al producto.
   3. Compara con state.json y acumula el historico en historial.json.
-  4. Manda los avisos que toquen y limpia el historico de mas de 24h.
+  4. Manda los avisos que toquen y poda el historico.
 """
 
 import json
@@ -26,16 +30,13 @@ from pathlib import Path
 import requests
 from playwright.sync_api import sync_playwright
 
+AQUI = Path(__file__).parent
+
 # --- Configuracion -------------------------------------------------------
 
-# Denominaciones con alerta puntual de bajada. El resumen diario y la "mejor
-# tarjeta" miran TODAS las que publique Eneba, no solo estas.
-DENOMINACIONES = [100, 200, 500]
-
-URL_BASE = os.environ.get(
-    "ENEBA_URL",
-    "https://www.eneba.com/store/all?text=steam%20wallet%20hong%20kong",
-)
+PRODUCTOS_FILE = AQUI / "productos.json"
+STATE_FILE = AQUI / "state.json"
+HISTORIAL_FILE = AQUI / "historial.json"
 
 # Tope de paginas a recorrer. Hoy hay 2 (34 resultados); el margen evita
 # quedarse corto si Eneba anade denominaciones.
@@ -44,15 +45,33 @@ MAX_PAGINAS = int(os.environ.get("ENEBA_MAX_PAGINAS", "5"))
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 
-# Opcional: avisa tambien si el ratio (HKD por euro) llega a este valor.
+# Umbral de la alerta puntual. Se exige que la bajada supere el mayor de:
+#   - un porcentaje del precio anterior (UMBRAL_BAJADA_PCT), y
+#   - un suelo en euros (UMBRAL_BAJADA_EUR).
+#
+# Por que un porcentaje y no solo euros: las denominaciones van de 0,60 EUR a
+# 124 EUR. Un umbral fijo de 0,20 EUR seria el 2% en la tarjeta de 100 HKD
+# (relevante) pero el 0,4% en la de 500 (ruido). El porcentaje escala solo.
+# Por que ademas un suelo en euros: evita avisar por redondeos en las tarjetas
+# baratas, donde un 1,5% son 2 centimos.
+# El 1,5% por defecto sale de lo observado entre ejecuciones consecutivas del
+# 24-08-2026: los movimientos normales rondaban el 0,8%. Ajustable.
+UMBRAL_BAJADA_PCT = float(os.environ.get("UMBRAL_BAJADA_PCT", "1.5"))
+UMBRAL_BAJADA_EUR = float(os.environ.get("UMBRAL_BAJADA_EUR", "0.10"))
+
+# Opcional: avisa tambien si el ratio (unidades por euro) llega a este valor.
 # OJO: calibralo con los valores que ve el runner de GitHub, no con los que
-# ves tu desde Espana (ver el aviso de "precio orientativo" mas abajo).
+# ves tu desde Espana (ver el aviso de "precio orientativo").
 RATIO_OBJETIVO = float(os.environ.get("RATIO_OBJETIVO", "0") or 0)
 
-# Bajadas menores a esto se ignoran (ruido de redondeo).
+# Diferencias menores a esto se consideran "igual" (ruido de redondeo).
 EPSILON = 0.005
 
-VENTANA_HORAS = 24  # cuanto historico se conserva
+VENTANA_RESUMEN_HORAS = 24  # ventana que resume el push diario
+# El historico se guarda 30 dias, no 24h: hace falta para el minimo historico
+# (mejora 5), el grafico (mejora 2) y el panel web (mejora 6).
+RETENCION_DIAS = int(os.environ.get("RETENCION_DIAS", "30"))
+
 # Se manda el resumen a partir de 23.5h en vez de 24h clavadas: con el cron
 # horario, exigir 24h haria que la hora del resumen se fuese corriendo un poco
 # cada dia hasta dar la vuelta al reloj.
@@ -60,23 +79,6 @@ HORAS_ENTRE_RESUMENES = 23.5
 
 AVISO_ORIENTATIVO = ("⚠️ Precio orientativo (servidor en EE.UU.), "
                      "verificar en Eneba antes de comprar.")
-
-STATE_FILE = Path(__file__).with_name("state.json")
-HISTORIAL_FILE = Path(__file__).with_name("historial.json")
-
-# Texto real de la ficha en Eneba, comprobado el 2026-08-24:
-#   "Steam Wallet Gift Card 100 HKD Steam Key HONG KONG"
-#   "HONG KONG"
-#   "From"
-#   "10.58"  (precedido del simbolo del euro)
-# El .{0,80}? permite que entre el titulo y el precio haya saltos de linea y
-# palabras sueltas, sin tener que acertar el formato exacto. Al ser perezoso,
-# se queda con el primer euro que aparece: el precio, no el "Cashback: €1.27"
-# que va detras en algunas fichas.
-PATRON_TARJETA = re.compile(
-    r"Steam Wallet Gift Card\s+(\d+)\s+HKD.{0,80}?€\s*([\d.,]+)",
-    re.DOTALL,
-)
 
 
 # --- Utilidades ----------------------------------------------------------
@@ -115,25 +117,52 @@ def hora_utc(epoch):
     return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def notificar(titulo, cuerpo, prioridad="default", tags="moneybag"):
-    """Manda un push a ntfy.sh. El titulo viaja en una cabecera HTTP, asi que
-    solo puede llevar ASCII; el cuerpo si admite acentos y emojis."""
+def migrar(datos, clave_lista, id_por_defecto):
+    """Convierte el formato antiguo (un solo producto, datos en la raiz) al
+    nuevo (namespace por producto). Sin esto, activar multi-producto tiraria
+    el historico ya acumulado."""
+    if "productos" in datos:
+        return datos
+    if not datos:
+        return {"productos": {}}
+    print("Migrando %s al formato multi-producto (id '%s')."
+          % (clave_lista, id_por_defecto))
+    return {"productos": {id_por_defecto: datos}}
+
+
+def notificar(titulo, cuerpo, prioridad="default", tags="moneybag",
+              url_accion=None, etiqueta_accion="Comprar en Eneba"):
+    """Manda un push a ntfy.sh.
+
+    Titulo, tags y la cabecera Actions viajan en cabeceras HTTP, que solo
+    admiten ASCII; el cuerpo si admite acentos y emojis.
+    """
     if not NTFY_TOPIC:
         print("NTFY_TOPIC no configurado: no envio push.")
         print("--- cuerpo que se habria enviado ---")
         print(cuerpo)
+        if url_accion:
+            print("[boton] %s -> %s" % (etiqueta_accion, url_accion))
         print("------------------------------------")
         return
+
+    cabeceras = {
+        "Title": titulo.encode("ascii", "ignore").decode("ascii"),
+        "Priority": prioridad,
+        "Tags": tags,
+    }
+    if url_accion:
+        cabeceras["Click"] = url_accion
+        # Formato de ntfy: "<tipo>, <etiqueta>, <url>". La etiqueta no puede
+        # llevar comas ni acentos (cabecera HTTP = ASCII).
+        etiqueta = etiqueta_accion.encode("ascii", "ignore").decode("ascii")
+        cabeceras["Actions"] = "view, %s, %s, clear=true" % (etiqueta, url_accion)
+
     try:
         r = requests.post(
             NTFY_SERVER + "/" + NTFY_TOPIC,
             data=cuerpo.encode("utf-8"),
-            headers={
-                "Title": titulo.encode("ascii", "ignore").decode("ascii"),
-                "Priority": prioridad,
-                "Tags": tags,
-                "Click": URL_BASE,
-            },
+            headers=cabeceras,
             timeout=20,
         )
         r.raise_for_status()
@@ -181,135 +210,182 @@ def abrir_navegador(p):
     raise ultimo_error
 
 
-def url_pagina(n):
+def preparar_contexto(navegador):
+    contexto = navegador.new_context(
+        locale="en-GB",
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+    )
+    # Eneba decide moneda, idioma y region con cookies, que fija por
+    # geolocalizacion en la primera visita. Las fijamos nosotros para que el
+    # resultado no dependa de desde donde se ejecute.
+    # Comprobado el 2026-08-24: con exchange=USD la misma tarjeta de 100 HKD
+    # sale como "$12.35" en vez de "€10.58". Sin esto, cada ejecucion desde un
+    # runner de GitHub (IP de EE.UU.) daria precios en dolares y el patron, que
+    # exige el simbolo del euro, no encontraria nada.
+    # OJO: la cookie 'region' NO cambia el precio (probado con spain,
+    # united-states y germany: identico). El precio lo decide la IP.
+    contexto.add_cookies([
+        {"name": "exchange", "value": "EUR", "domain": ".eneba.com", "path": "/"},
+        {"name": "lng", "value": "en", "domain": ".eneba.com", "path": "/"},
+        {"name": "region", "value": "spain", "domain": ".eneba.com", "path": "/"},
+    ])
+    return contexto
+
+
+def url_pagina(base, n):
     """Anade (o sustituye) el parametro page= de la URL base."""
-    if re.search(r"[?&]page=\d+", URL_BASE):
-        return re.sub(r"([?&]page=)\d+", r"\g<1>%d" % n, URL_BASE)
-    separador = "&" if "?" in URL_BASE else "?"
-    return "%s%spage=%d" % (URL_BASE, separador, n)
+    if re.search(r"[?&]page=\d+", base):
+        return re.sub(r"([?&]page=)\d+", r"\g<1>%d" % n, base)
+    separador = "&" if "?" in base else "?"
+    return "%s%spage=%d" % (base, separador, n)
 
 
-def obtener_ofertas():
-    """Devuelve {100: 10.58, 200: 21.06, ...} con el precio 'From' en EUR de
-    TODAS las denominaciones publicadas, recorriendo las paginas de resultados.
+def obtener_ofertas(pagina, producto):
+    """Devuelve (ofertas, enlaces) para un producto.
+
+    ofertas: {100: 10.58, 200: 21.06, ...} precio 'From' en EUR
+    enlaces: {100: 'https://www.eneba.com/...'} enlace directo a la ficha
     """
-    ofertas = {}
+    patron_titulo = re.compile(producto["patron_titulo"], re.DOTALL)
+    patron_enlace = (re.compile(producto["patron_enlace"])
+                     if producto.get("patron_enlace") else None)
 
-    with sync_playwright() as p:
-        navegador = abrir_navegador(p)
-        contexto = navegador.new_context(
-            locale="en-GB",
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-        )
+    ofertas, enlaces = {}, {}
+    texto_total = ""
 
-        # Eneba decide moneda, idioma y region con cookies, que fija por
-        # geolocalizacion en la primera visita. Las fijamos nosotros para que
-        # el resultado no dependa de desde donde se ejecute.
-        # Comprobado el 2026-08-24: con exchange=USD la misma tarjeta de
-        # 100 HKD sale como "$12.35" en vez de "€10.58". Sin esto, cada
-        # ejecucion desde un runner de GitHub (IP de EE.UU.) daria precios en
-        # dolares y el patron, que exige el simbolo del euro, no encontraria
-        # nada: falsa alarma de "tracker roto" cada 2 horas.
-        # OJO: la cookie 'region' NO cambia el precio (probado con spain,
-        # united-states y germany: identico). El precio lo decide la IP.
-        contexto.add_cookies([
-            {"name": "exchange", "value": "EUR", "domain": ".eneba.com", "path": "/"},
-            {"name": "lng", "value": "en", "domain": ".eneba.com", "path": "/"},
-            {"name": "region", "value": "spain", "domain": ".eneba.com", "path": "/"},
-        ])
+    for n in range(1, MAX_PAGINAS + 1):
+        pagina.goto(url_pagina(producto["url"], n),
+                    wait_until="domcontentloaded", timeout=90_000)
+        try:
+            pagina.wait_for_selector("text=HKD", timeout=45_000)
+        except Exception:
+            print("  Pagina %d: no aparecio ningun producto, dejo de paginar." % n)
+            break
 
-        pagina = contexto.new_page()
-        texto_total = ""
+        pagina.wait_for_timeout(3000)  # margen para que carguen los precios
+        texto = pagina.inner_text("body")
+        texto_total += texto
 
-        for n in range(1, MAX_PAGINAS + 1):
-            url = url_pagina(n)
-            pagina.goto(url, wait_until="domcontentloaded", timeout=90_000)
-            try:
-                pagina.wait_for_selector("text=Steam Wallet Gift Card", timeout=45_000)
-            except Exception:
-                print("Pagina %d: no aparecio ningun producto, dejo de paginar." % n)
-                break
+        encontradas = {}
+        for denom, eur in patron_titulo.findall(texto):
+            precio = a_float(eur)
+            clave = int(denom)
+            # Nos quedamos con el mas barato si el producto sale repetido.
+            if clave not in encontradas or precio < encontradas[clave]:
+                encontradas[clave] = precio
 
-            pagina.wait_for_timeout(3000)  # margen para que carguen los precios
-            texto = pagina.inner_text("body")
-            texto_total += texto
+        # Enlaces directos: se sacan del href, no del texto. El patron del
+        # href es estable y evita depender de como se maquete la tarjeta.
+        if patron_enlace:
+            for href in pagina.eval_on_selector_all(
+                    "a[href]", "els => els.map(e => e.getAttribute('href'))"):
+                if not href:
+                    continue
+                m = patron_enlace.match(href)
+                if m:
+                    ruta, denom = m.group(1), int(m.group(2))
+                    enlaces.setdefault(denom, "https://www.eneba.com" + ruta)
 
-            encontradas = {}
-            for hkd, eur in PATRON_TARJETA.findall(texto):
-                precio = a_float(eur)
-                clave = int(hkd)
-                # Nos quedamos con el mas barato si el producto sale repetido.
-                if clave not in encontradas or precio < encontradas[clave]:
-                    encontradas[clave] = precio
+        nuevas = [k for k in encontradas if k not in ofertas]
+        print("  Pagina %d: %d denominaciones (%d nuevas)"
+              % (n, len(encontradas), len(nuevas)))
 
-            nuevas = [k for k in encontradas if k not in ofertas]
-            print("Pagina %d: %d denominaciones (%d nuevas)"
-                  % (n, len(encontradas), len(nuevas)))
-
-            if not encontradas:
-                break
-            for k, v in encontradas.items():
-                if k not in ofertas or v < ofertas[k]:
-                    ofertas[k] = v
-            if not nuevas:
-                # Una pagina que no aporta nada nuevo suele ser la ultima
-                # repetida; paramos para no dar vueltas de mas.
-                break
-
-        navegador.close()
+        if not encontradas:
+            break
+        for k, v in encontradas.items():
+            if k not in ofertas or v < ofertas[k]:
+                ofertas[k] = v
+        if not nuevas:
+            # Una pagina que no aporta nada nuevo suele ser la ultima
+            # repetida; paramos para no dar vueltas de mas.
+            break
 
     # Diagnostico util: si la pagina cargo pero en otra moneda, decirlo claro
     # en vez de soltar un generico "no se encontro nada".
     if "€" not in texto_total and re.search(r"[$£]\s?\d", texto_total):
-        print("AVISO: la pagina cargo en otra moneda (no hay simbolo de euro). "
-              "La cookie 'exchange' no se aplico.")
+        print("  AVISO: la pagina cargo en otra moneda (no hay simbolo de "
+              "euro). La cookie 'exchange' no se aplico.")
 
-    return ofertas
+    return ofertas, enlaces
 
 
 # --- Historico -----------------------------------------------------------
 
-def limpiar_historial(muestras, ahora):
-    """Tira las muestras de mas de VENTANA_HORAS para que el archivo no crezca
+def podar(muestras, ahora):
+    """Tira las muestras de mas de RETENCION_DIAS para que el archivo no crezca
     sin limite."""
-    limite = ahora - VENTANA_HORAS * 3600
+    limite = ahora - RETENCION_DIAS * 86400
     return [m for m in muestras if m.get("t", 0) >= limite]
 
 
-def rango_24h(muestras, hkd):
-    """Devuelve (minimo, maximo) de una denominacion en las muestras dadas."""
-    valores = [m["precios"][str(hkd)] for m in muestras if str(hkd) in m["precios"]]
+def en_ventana(muestras, ahora, horas):
+    limite = ahora - horas * 3600
+    return [m for m in muestras if m.get("t", 0) >= limite]
+
+
+def rango(muestras, denom):
+    """(minimo, maximo) de una denominacion en las muestras dadas."""
+    valores = [m["precios"][str(denom)] for m in muestras
+               if str(denom) in m.get("precios", {})]
     if not valores:
         return None, None
     return min(valores), max(valores)
 
 
-def construir_resumen(muestras, ofertas, ahora):
-    """Arma el cuerpo del push de resumen diario."""
-    lineas = []
+def minimo_historico(muestras, denom, ahora):
+    """Minimo de una denominacion en la retencion disponible.
 
-    if muestras:
-        antigua = muestras[0]
+    Devuelve (minimo, dias_cubiertos). Si hay menos de RETENCION_DIAS de
+    datos, devuelve los dias que haya de verdad: el mensaje debe decir la
+    cobertura real, no afirmar '30 dias' cuando solo hay 2 horas.
+    """
+    conservadas = [m for m in muestras if str(denom) in m.get("precios", {})]
+    if not conservadas:
+        return None, 0.0
+    minimo = min(m["precios"][str(denom)] for m in conservadas)
+    dias = (ahora - min(m["t"] for m in conservadas)) / 86400.0
+    return minimo, dias
+
+
+def texto_dias(dias):
+    """'30 dias', '3 dias', '18 horas'... segun lo que se cubra de verdad."""
+    if dias >= 1.5:
+        return "%.0f dias" % round(dias)
+    if dias >= 1:
+        return "1 dia"
+    horas = max(1, round(dias * 24))
+    return "1 hora" if horas == 1 else "%d horas" % horas
+
+
+# --- Mensajes ------------------------------------------------------------
+
+def construir_resumen(producto, muestras_24h, ofertas, enlaces, ahora):
+    """Cuerpo del push de resumen diario."""
+    unidad = producto.get("unidad", "")
+    lineas = [producto["nombre"]]
+
+    if muestras_24h:
+        antigua = muestras_24h[0]
         horas = (ahora - antigua["t"]) / 3600.0
     else:
         antigua, horas = None, 0.0
 
     # Honestidad: el primer dia el historico no cubre 24h enteras, y el
     # mensaje debe decir lo que cubre de verdad, no "24h" a secas.
-    lineas.append("Ventana: %.1f h, %d muestras" % (horas, len(muestras)))
+    lineas.append("Ventana: %.1f h, %d muestras" % (horas, len(muestras_24h)))
     lineas.append("")
 
-    for hkd in DENOMINACIONES:
-        actual = ofertas.get(hkd)
+    for denom in producto["denominaciones_vigiladas"]:
+        actual = ofertas.get(denom)
         if actual is None:
-            lineas.append("%d HKD: no encontrado ahora mismo" % hkd)
+            lineas.append("%d %s: no encontrado ahora mismo" % (denom, unidad))
             continue
 
-        minimo, maximo = rango_24h(muestras, hkd)
-        antes = antigua["precios"].get(str(hkd)) if antigua else None
+        minimo, maximo = rango(muestras_24h, denom)
+        antes = antigua["precios"].get(str(denom)) if antigua else None
 
         if antes is None:
             cambio = "sin referencia previa"
@@ -321,133 +397,208 @@ def construir_resumen(muestras, ofertas, ahora):
             cambio = "igual"
 
         if minimo is None:
-            lineas.append("%d HKD: ahora %.2f € (%s)" % (hkd, actual, cambio))
+            lineas.append("%d %s: ahora %.2f € (%s)" % (denom, unidad, actual, cambio))
         else:
-            lineas.append("%d HKD: ahora %.2f € | min %.2f | max %.2f | %s"
-                          % (hkd, actual, minimo, maximo, cambio))
+            lineas.append("%d %s: ahora %.2f € | min %.2f | max %.2f | %s"
+                          % (denom, unidad, actual, minimo, maximo, cambio))
 
-    # Mejor tarjeta de TODO el catalogo, no solo de las tres vigiladas.
+    # Mejor tarjeta de TODO el catalogo, no solo de las vigiladas.
+    url_boton = producto["url"]
     if ofertas:
-        mejor = max(ofertas.items(), key=lambda kv: kv[0] / kv[1])
+        mejor, precio_mejor = max(ofertas.items(), key=lambda kv: kv[0] / kv[1])
         lineas.append("")
-        lineas.append("Mejor tarjeta ahora mismo: %d HKD — %.2f HKD/€ (%.2f €)"
-                      % (mejor[0], mejor[0] / mejor[1], mejor[1]))
+        lineas.append("Mejor tarjeta ahora mismo: %d %s — %.2f %s/€ (%.2f €)"
+                      % (mejor, unidad, mejor / precio_mejor, unidad, precio_mejor))
         lineas.append("(%d denominaciones comparadas)" % len(ofertas))
+        url_boton = enlaces.get(mejor, url_boton)
 
     lineas.append("")
     lineas.append(AVISO_ORIENTATIVO)
-    return "\n".join(lineas)
+    return "\n".join(lineas), url_boton
+
+
+# --- Un producto ---------------------------------------------------------
+
+def procesar(producto, pagina, estado, historial, ahora):
+    """Procesa un producto. Devuelve True si fue bien."""
+    pid = producto["id"]
+    unidad = producto.get("unidad", "")
+    print("\n=== %s (%s) ===" % (producto["nombre"], pid))
+
+    est = estado["productos"].setdefault(pid, {})
+    hist = historial["productos"].setdefault(pid, {"muestras": []})
+    muestras = podar(hist.get("muestras", []), ahora)
+
+    ofertas, enlaces = obtener_ofertas(pagina, producto)
+
+    if not ofertas:
+        print("  No se ha podido extraer ninguna oferta. "
+              "Probablemente Eneba cambio el HTML: revisa patron_titulo.")
+        if not est.get("fallo_previo"):
+            notificar("Eneba tracker roto: %s" % pid,
+                      "No se pudo leer ningun precio de %s. Revisa "
+                      "patron_titulo en productos.json." % producto["nombre"],
+                      prioridad="high", tags="warning",
+                      url_accion=producto["url"], etiqueta_accion="Abrir Eneba")
+        est["fallo_previo"] = True
+        hist["muestras"] = muestras
+        return False
+
+    print("  Total denominaciones: %d -> %s" % (len(ofertas), sorted(ofertas)))
+    print("  Enlaces directos capturados: %d" % len(enlaces))
+
+    # --- Alerta puntual de bajada ---------------------------------------
+    anteriores = est.get("precios", {})
+    lineas = [producto["nombre"]]
+    hay_alerta = False
+    url_boton = producto["url"]
+    denom_alerta = None
+
+    for denom in producto["denominaciones_vigiladas"]:
+        if denom not in ofertas:
+            print("  %d %s: no encontrado en la pagina." % (denom, unidad))
+            continue
+
+        precio = ofertas[denom]
+        ratio = denom / precio  # unidades por euro; mas alto = mejor
+        antes = anteriores.get(str(denom))
+        notas = []
+
+        if antes is None:
+            marca = "nuevo"
+        elif precio < antes - EPSILON:
+            bajada = antes - precio
+            umbral = max(UMBRAL_BAJADA_EUR, antes * UMBRAL_BAJADA_PCT / 100.0)
+            if bajada >= umbral:
+                marca = "BAJA %.2f desde %.2f" % (bajada, antes)
+                hay_alerta = True
+                if denom_alerta is None:
+                    denom_alerta = denom
+            else:
+                marca = ("baja %.2f desde %.2f (bajo umbral %.2f)"
+                         % (bajada, antes, umbral))
+        elif precio > antes + EPSILON:
+            marca = "sube desde %.2f" % antes
+        else:
+            marca = "igual"
+
+        # Minimo historico: se compara contra el historico ANTERIOR a esta
+        # lectura, que aun no se ha anadido.
+        min_hist, dias = minimo_historico(muestras, denom, ahora)
+        if min_hist is not None and precio <= min_hist + EPSILON:
+            notas.append("📉 Precio mas bajo visto en %s" % texto_dias(dias))
+
+        if RATIO_OBJETIVO and ratio >= RATIO_OBJETIVO:
+            marca += " | objetivo %.2f alcanzado" % RATIO_OBJETIVO
+            hay_alerta = True
+            if denom_alerta is None:
+                denom_alerta = denom
+
+        print("  %d %s -> %.2f EUR (%.2f/€) [%s]%s"
+              % (denom, unidad, precio, ratio, marca,
+                 " " + " ".join(notas) if notas else ""))
+        lineas.append("%d %s: %.2f € (%.2f %s/€) [%s]"
+                      % (denom, unidad, precio, ratio, unidad, marca))
+        for nota in notas:
+            lineas.append("   " + nota)
+
+    mejor, precio_mejor = max(ofertas.items(), key=lambda kv: kv[0] / kv[1])
+    lineas.append("Mejor ratio: %d %s (%.2f %s/€)"
+                  % (mejor, unidad, mejor / precio_mejor, unidad))
+    lineas.append(AVISO_ORIENTATIVO)
+    if denom_alerta is not None:
+        url_boton = enlaces.get(denom_alerta, producto["url"])
+
+    if not anteriores:
+        print("  Primera ejecucion de este producto: guardo estado, sin comparar.")
+    elif hay_alerta:
+        notificar("Eneba: baja %s" % producto["nombre"], "\n".join(lineas),
+                  prioridad="high", tags="chart_with_downwards_trend",
+                  url_accion=url_boton)
+    else:
+        print("  Sin bajadas por encima del umbral. No envio alerta.")
+
+    # --- Historico -------------------------------------------------------
+    # Solo se guardan las denominaciones vigiladas, no las 34: el historico se
+    # commitea cada hora y guardar 34 precios x 30 dias hincharia el repo sin
+    # aportar nada (el resto solo se usa en la lectura actual).
+    muestras.append({
+        "t": int(ahora),
+        "iso": hora_utc(ahora),
+        "precios": {str(d): ofertas[d]
+                    for d in producto["denominaciones_vigiladas"] if d in ofertas},
+    })
+    muestras.sort(key=lambda m: m["t"])
+
+    # --- Resumen diario --------------------------------------------------
+    ultimo = est.get("ultimo_resumen")
+    if ultimo is None:
+        # Primera vez: no tiene sentido resumir 24h con una sola muestra.
+        print("  Sin resumen previo: arranco el contador, el primero en ~24h.")
+        est["ultimo_resumen"] = int(ahora)
+    elif (ahora - ultimo) >= HORAS_ENTRE_RESUMENES * 3600:
+        print("  Toca resumen (%.1f h desde el ultimo). Enviando."
+              % ((ahora - ultimo) / 3600.0))
+        cuerpo, url_res = construir_resumen(
+            producto, en_ventana(muestras, ahora, VENTANA_RESUMEN_HORAS),
+            ofertas, enlaces, ahora)
+        notificar("Eneba: resumen 24h — %s" % producto["nombre"], cuerpo,
+                  prioridad="default", tags="bar_chart", url_accion=url_res)
+        est["ultimo_resumen"] = int(ahora)
+    else:
+        print("  Resumen no toca todavia (faltan %.1f h)."
+              % (HORAS_ENTRE_RESUMENES - (ahora - ultimo) / 3600.0))
+
+    # --- Guardar ---------------------------------------------------------
+    est["nombre"] = producto["nombre"]
+    est["unidad"] = unidad
+    est["vigiladas"] = producto["denominaciones_vigiladas"]
+    est["precios"] = {str(d): ofertas[d]
+                      for d in producto["denominaciones_vigiladas"] if d in ofertas}
+    est["todas"] = {str(k): v for k, v in sorted(ofertas.items())}
+    est["enlaces"] = {str(k): v for k, v in sorted(enlaces.items())}
+    est["actualizado"] = hora_utc(ahora)
+    est["fallo_previo"] = False
+
+    hist["muestras"] = muestras
+    print("  Historial: %d muestras (retencion %d dias)."
+          % (len(muestras), RETENCION_DIAS))
+    return True
 
 
 # --- Programa principal --------------------------------------------------
 
 def main():
     ahora = time.time()
-    print("Consultando: %s (hasta %d paginas)" % (URL_BASE, MAX_PAGINAS))
-    ofertas = obtener_ofertas()
 
-    estado = leer_json(STATE_FILE, {})
-
-    if not ofertas:
-        print("No se ha podido extraer ninguna oferta. "
-              "Probablemente Eneba cambio el HTML: revisa PATRON_TARJETA.")
-        # Solo avisamos del fallo la primera vez, para no dar la lata cada hora.
-        if not estado.get("fallo_previo"):
-            notificar("Eneba tracker roto",
-                      "No se pudo leer ningun precio. Revisa el patron de "
-                      "extraccion en check_price.py.",
-                      prioridad="high", tags="warning")
-        estado["fallo_previo"] = True
-        guardar_json(STATE_FILE, estado)
+    config = leer_json(PRODUCTOS_FILE, None)
+    if not config or not config.get("productos"):
+        print("No hay productos que vigilar: revisa productos.json.")
         return 1
+    productos = config["productos"]
+    print("Productos a vigilar: %d" % len(productos))
 
-    print("Total denominaciones encontradas: %d -> %s"
-          % (len(ofertas), sorted(ofertas)))
+    id_principal = productos[0]["id"]
+    estado = migrar(leer_json(STATE_FILE, {}), "state.json", id_principal)
+    historial = migrar(leer_json(HISTORIAL_FILE, {}), "historial.json", id_principal)
+    estado.setdefault("productos", {})
+    historial.setdefault("productos", {})
 
-    # --- 1. Alerta puntual de bajada (solo 100/200/500) ------------------
-    anteriores = estado.get("precios", {})
-    lineas_alerta = []
-    hay_bajada = False
+    todo_bien = True
+    with sync_playwright() as p:
+        navegador = abrir_navegador(p)
+        contexto = preparar_contexto(navegador)
+        pagina = contexto.new_page()
+        try:
+            for producto in productos:
+                if not procesar(producto, pagina, estado, historial, ahora):
+                    todo_bien = False
+        finally:
+            navegador.close()
 
-    for hkd in DENOMINACIONES:
-        if hkd not in ofertas:
-            print("%d HKD: no encontrado en la pagina." % hkd)
-            continue
-
-        precio = ofertas[hkd]
-        ratio = hkd / precio  # HKD que compras por cada euro; mas alto = mejor
-        antes = anteriores.get(str(hkd))
-
-        if antes is None:
-            marca = "nuevo"
-        elif precio < antes - EPSILON:
-            marca = "BAJA desde %.2f" % antes
-            hay_bajada = True
-        elif precio > antes + EPSILON:
-            marca = "sube desde %.2f" % antes
-        else:
-            marca = "igual"
-
-        if RATIO_OBJETIVO and ratio >= RATIO_OBJETIVO:
-            marca += " | objetivo %.2f alcanzado" % RATIO_OBJETIVO
-            hay_bajada = True
-
-        print("%d HKD -> %.2f EUR (%.2f HKD/EUR) [%s]" % (hkd, precio, ratio, marca))
-        lineas_alerta.append("%d HKD: %.2f EUR (%.2f HKD/€) [%s]"
-                             % (hkd, precio, ratio, marca))
-
-    mejor_clave, mejor_precio = max(ofertas.items(), key=lambda kv: kv[0] / kv[1])
-    lineas_alerta.append("Mejor ratio: %d HKD (%.2f HKD/€)"
-                         % (mejor_clave, mejor_clave / mejor_precio))
-    lineas_alerta.append(AVISO_ORIENTATIVO)
-
-    primera_vez = not anteriores
-    if primera_vez:
-        print("Primera ejecucion: guardo el estado, sin comparar.")
-    elif hay_bajada:
-        notificar("Eneba: baja el Steam Wallet HKD", "\n".join(lineas_alerta),
-                  prioridad="high", tags="chart_with_downwards_trend")
-    else:
-        print("Sin bajadas. No envio alerta.")
-
-    # --- 2. Historico ----------------------------------------------------
-    historial = leer_json(HISTORIAL_FILE, {"muestras": []})
-    muestras = limpiar_historial(historial.get("muestras", []), ahora)
-    muestras.append({
-        "t": int(ahora),
-        "iso": hora_utc(ahora),
-        "precios": {str(k): v for k, v in sorted(ofertas.items())},
-    })
-    muestras.sort(key=lambda m: m["t"])
-
-    # --- 3. Resumen diario -----------------------------------------------
-    ultimo = estado.get("ultimo_resumen")
-    if ultimo is None:
-        # Primera vez: no tiene sentido resumir 24h con una sola muestra.
-        # Arrancamos el contador y el primer resumen saldra manana.
-        print("Sin resumen previo: arranco el contador, el primero sale en ~24h.")
-        estado["ultimo_resumen"] = int(ahora)
-    elif (ahora - ultimo) >= HORAS_ENTRE_RESUMENES * 3600:
-        horas_desde = (ahora - ultimo) / 3600.0
-        print("Toca resumen (%.1f h desde el ultimo). Enviando." % horas_desde)
-        notificar("Eneba: resumen 24h",
-                  construir_resumen(muestras, ofertas, ahora),
-                  prioridad="default", tags="bar_chart")
-        estado["ultimo_resumen"] = int(ahora)
-    else:
-        faltan = HORAS_ENTRE_RESUMENES - (ahora - ultimo) / 3600.0
-        print("Resumen no toca todavia (faltan %.1f h)." % faltan)
-
-    # --- 4. Guardar ------------------------------------------------------
-    estado["precios"] = {str(k): ofertas[k] for k in DENOMINACIONES if k in ofertas}
-    estado["todas"] = {str(k): v for k, v in sorted(ofertas.items())}
-    estado["fallo_previo"] = False
     guardar_json(STATE_FILE, estado)
-
-    historial["muestras"] = muestras
     guardar_json(HISTORIAL_FILE, historial)
-    print("Historial: %d muestras (ventana de %d h)." % (len(muestras), VENTANA_HORAS))
-    return 0
+    return 0 if todo_bien else 1
 
 
 if __name__ == "__main__":

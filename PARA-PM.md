@@ -9,6 +9,166 @@ Repo: https://github.com/CharlesAriza/eneba-tracker (privado)
 
 ---
 
+## Entrada 009 — 2026-08-24 — Resumen 24h, histórico y catálogo completo
+
+**Estado:** los 7 puntos implementados, probados y subidos. Commit `4ae23cc`
+en `main`.
+
+### 🟠 Corrección de alcance en el punto 5: la web tiene 2 páginas
+
+El encargo decía "todas las denominaciones que muestra la página". **La
+página 1 solo muestra 20 de las 34** que hay. La página 2 tiene otras 14
+(25, 35, 45, 80, 120, 175, 240, 250, 400, 550, 650, 850, 900, 950).
+
+Se comprobó abriendo la página 2 antes de tocar código. Sin paginar, el
+punto 6 ("mejor tarjeta de todas") habría dado una respuesta falsa: se
+compararía contra 20 tarjetas afirmando que son todas. Por eso la extracción
+**recorre las páginas** hasta que una no aporta denominaciones nuevas (tope
+configurable, `ENEBA_MAX_PAGINAS=5` por defecto, por si Eneba añade más).
+
+### Lo implementado
+
+| Punto | Estado |
+|---|---|
+| 1. Cron a cada hora | ✅ `0 * * * *`, marcado como TEMPORAL en el YAML y en el README |
+| 2. Histórico 24h | ✅ `historial.json`, cada muestra con epoch + ISO UTC + las 34 denominaciones |
+| 3. Resumen diario | ✅ push aparte, se manda haya o no bajadas |
+| 4. Limpieza >24h | ✅ verificada (ver pruebas) |
+| 5. Todas las denominaciones | ✅ 34, con paginación |
+| 6. Mejor tarjeta global | ✅ en el resumen, sobre las 34 |
+| 7. Alertas puntuales sin cambios | ✅ siguen solo en 100/200/500 |
+
+También se actualizó el workflow para commitear `historial.json` además de
+`state.json`.
+
+### Prueba 1 — extracción completa
+
+```
+Pagina 1: 20 denominaciones (20 nuevas)
+Pagina 2: 14 denominaciones (14 nuevas)
+Pagina 3: no aparecio ningun producto, dejo de paginar.
+Total denominaciones encontradas: 34 -> [5, 10, 15, 20, 25, 35, 40, 45, 50,
+60, 70, 80, 100, 110, 120, 125, 150, 160, 175, 200, 240, 250, 300, 400, 500,
+550, 600, 650, 750, 800, 850, 900, 950, 1000]
+```
+
+Contrastado con la web, que declara **"Results found: 34"**. Coinciden las 34,
+una a una. La página 3 corta sola, sin necesidad de saber cuántas hay.
+
+Comprobación cruzada de un caso: la mejor tarteja sale **50 HKD a 9,58 HKD/€**,
+lo que implica 50 ÷ 9,58 = **5,22 €**; en la web, la ficha de 50 HKD marca
+"From €5.22". Cuadra. Y no es ninguna de las tres vigiladas: exactamente el
+caso que el punto 6 quería cubrir.
+
+### Prueba 2 — rama de resumen forzada
+
+Se puso `ultimo_resumen` a hace 25h y se inyectaron 12 muestras sintéticas
+repartidas en 24h. Resultado:
+
+```
+Toca resumen (25.0 h desde el ultimo). Enviando.
+```
+
+Mensaje generado (así es como llega al móvil):
+
+```
+Ventana: 22.0 h, 12 muestras
+
+100 HKD: ahora 10.58 € | min 10.29 | max 10.78 | sube 0.27
+200 HKD: ahora 21.23 € | min 20.67 | max 21.69 | baja 0.05
+500 HKD: ahora 52.80 € | min 51.33 | max 54.31 | sube 0.43
+
+Mejor tarjeta ahora mismo: 50 HKD — 9.58 HKD/€ (5.22 €)
+(34 denominaciones comparadas)
+
+⚠️ Precio orientativo (servidor en EE.UU.), verificar en Eneba antes de comprar.
+```
+
+### Prueba 3 — limpieza del histórico (verificada de rebote)
+
+12 muestras sintéticas + 1 nueva = 13. Quedaron **12**: la más antigua
+superaba las 24h y se descartó. El punto 4 no se comprobó "por inspección
+del código" sino porque la poda ocurrió de verdad.
+
+### Decisiones que conviene que el PM conozca
+
+**1. El resumen declara la ventana real, no "24h" a secas.** Dice
+`Ventana: 22.0 h, 12 muestras`. El primer día el histórico no cubre 24h, y
+poner "24h" sería afirmar algo falso. La comparación "hace 24h" se hace contra
+la muestra más antigua disponible.
+
+**2. El primer resumen no se manda de inmediato.** Si no hay `ultimo_resumen`,
+se inicializa el contador y el primero sale ~24h después. Un "resumen de 24h"
+con una sola muestra no informa de nada.
+
+**3. Umbral de 23,5h en vez de 24h.** Con cron horario, exigir 24h clavadas
+haría que la hora del resumen se corriese un poco cada día hasta dar la vuelta
+al reloj. Con 23,5h se queda estable.
+
+**4. `RATIO_OBJETIVO` sigue necesitando calibrarse** con los valores del
+runner (~9,0 HKD/€), no con los de España (~9,45). Documentado en el README y
+en el propio código.
+
+### Datos sintéticos: eliminados
+
+Tras las pruebas se borraron `state.json` e `historial.json` y se regeneraron
+con una ejecución real limpia. Lo commiteado es 1 muestra genuina con las 34
+denominaciones. **No hay ni un dato inventado en el repo.**
+
+### Verificación en CI — ✅ todo confirmado
+
+Run manual https://github.com/CharlesAriza/eneba-tracker/actions/runs/32771341641
+(éxito). Extractos del log:
+
+```
+Navegador: chromium de Playwright
+Pagina 1: 20 denominaciones (20 nuevas)
+Pagina 2: 14 denominaciones (14 nuevas)
+Pagina 3: no aparecio ningun producto, dejo de paginar.
+Total denominaciones encontradas: 34 -> [5, 10, ..., 950, 1000]
+100 HKD -> 11.13 EUR (8.98 HKD/EUR) [sube desde 10.58]
+200 HKD -> 22.34 EUR (8.95 HKD/EUR) [sube desde 21.23]
+500 HKD -> 55.23 EUR (9.05 HKD/EUR) [sube desde 52.80]
+Resumen no toca todavia (faltan 23.5 h).
+Historial: 2 muestras (ventana de 24 h).
+```
+```
+[main 44505c4] Actualizar estado e historial [skip ci]
+ 2 files changed, 77 insertions(+), 37 deletions(-)
+```
+
+Confirmado punto por punto:
+- **Paginación en el runner:** 20 + 14 = 34, igual que en local.
+- **Chromium empaquetado**, sin fallback.
+- **Precios en EUR** (los de EE.UU.: 11,13 / 22,34 / 55,23).
+- **Rama del resumen:** entra por el `else` y dice cuánto falta. El contador
+  arrancó en el run anterior, así que 23,5 h es lo esperado.
+- **Histórico:** 2 muestras (la genuina local + esta del runner).
+- **Commit de los DOS archivos:** `2 files changed`. El paso modificado
+  funciona.
+
+El "sube desde" es lo previsto y **no** es una falsa alarma: la línea base
+commiteada venía de una ejecución local (precios de España, más bajos) y el
+runner ve los de EE.UU. Al ser subida, no dispara alerta. A partir de ahora
+compara runner contra runner.
+
+### Pendiente
+
+- **Devolver el cron a `0 */2 * * *`** cuando termine la fase de prueba. Está
+  marcado como TEMPORAL en el YAML y en el README, pero requiere confirmación
+  expresa según el encargo.
+- El primer resumen real llegará ~24h después del primer run con este código.
+
+### Concepto enseñado
+
+"Todas las denominaciones que muestra la página" parecía una instrucción
+clara, pero la página mostraba 20 de 34. Cuando un encargo dice "todo", vale
+la pena comprobar contra el propio dato de la fuente — aquí, el "Results
+found: 34" que la web declara — en vez de fiarse de lo que se ve en la
+primera pantalla.
+
+---
+
 ## Entrada 008 — 2026-08-24 — Aviso de precio orientativo añadido y subido
 
 **Estado:** hecho. Commit `645e208` en `main` del repo remoto.

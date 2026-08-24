@@ -19,13 +19,52 @@ precio baja respecto a la última comprobación.
    regular (`PATRON_TARJETA`).
 4. Compara con `state.json`, que guarda lo que se vio la vez anterior, y
    acumula cada lectura en `historial.json`.
-5. Manda dos tipos de push:
-   - **Alerta**: cuando baja el precio de 100, 200 o 500 HKD.
+5. Manda dos tipos de push, **ambos con botón "Comprar en Eneba"** que abre
+   la ficha exacta del producto:
+   - **Alerta**: cuando baja el precio de 100, 200 o 500 HKD **por encima del
+     umbral** (ver abajo). Si el precio iguala el mínimo de los últimos 30
+     días, añade una línea "📉 Precio más bajo visto en N días".
    - **Resumen diario**: una vez cada ~24h, con mínimos y máximos de la
      ventana y la tarjeta de mejor ratio **de las 34**, no solo de las tres
      vigiladas. Se manda aunque no haya habido ninguna bajada.
-6. Descarta del histórico las muestras de más de 24h para que el archivo no
-   crezca sin límite.
+6. Descarta del histórico las muestras de más de **30 días**.
+
+## Umbral de alerta
+
+Para no avisar por dos céntimos, la bajada tiene que superar el mayor de:
+
+- un **porcentaje** del precio anterior (`UMBRAL_BAJADA_PCT`, por defecto
+  **1,5 %**), y
+- un **suelo en euros** (`UMBRAL_BAJADA_EUR`, por defecto **0,10 €**).
+
+Por qué las dos condiciones: las denominaciones van de 0,60 € a 124 €. Un
+umbral fijo de 0,20 € sería el 2 % en la tarjeta de 100 HKD (relevante) pero
+el 0,4 % en la de 500 (ruido) — el porcentaje escala solo. Y el suelo en euros
+evita avisar por redondeos en las tarjetas baratas, donde un 1,5 % son dos
+céntimos. El 1,5 % sale de lo observado el 24-08-2026 entre ejecuciones
+consecutivas: los movimientos normales rondaban el 0,8 %.
+
+## Vigilar más de un producto
+
+Los productos se declaran en `productos.json`. Para añadir uno **no hay que
+tocar el código**: se copia el bloque y se ajustan `id`, `nombre`, `url`,
+`denominaciones_vigiladas` y los dos patrones. Cada producto guarda su propio
+estado, su propio histórico y su propio gráfico.
+
+## Panel web
+
+`index.html` es una página estática sin frameworks que lee `historial.json`,
+`state.json` y `productos.json` del propio repositorio y dibuja la evolución
+de precios y ratios, más el catálogo completo ordenado por ratio.
+
+Para verla en local **hace falta servirla por HTTP** (abrir el archivo
+directamente no funciona: el navegador bloquea el `fetch` en `file://`):
+
+```bash
+python -m http.server 8000
+```
+
+Y abrir http://127.0.0.1:8000
 
 El `locale` del navegador (`en-GB` vs `es-ES`) **no** influye: comprobado que
 ambos devuelven títulos en inglés y precios con punto decimal. Lo que manda es
@@ -130,6 +169,9 @@ saturar Eneba. Dos avisos de GitHub:
 | `NTFY_TOPIC` | Sí (para recibir push) | Topic de ntfy.sh |
 | `NTFY_SERVER` | No | Servidor ntfy alternativo (por defecto `https://ntfy.sh`) |
 | `RATIO_OBJETIVO` | No | Avisa al alcanzar ese ratio HKD/€ |
+| `UMBRAL_BAJADA_PCT` | No | % mínimo de bajada para alertar (def. 1.5) |
+| `UMBRAL_BAJADA_EUR` | No | Suelo en € para alertar (def. 0.10) |
+| `RETENCION_DIAS` | No | Días de histórico que se conservan (def. 30) |
 | `ENEBA_URL` | No | Cambiar la página que se consulta (sin `page=`) |
 | `ENEBA_MAX_PAGINAS` | No | Tope de páginas a recorrer (por defecto 5) |
 | `PLAYWRIGHT_CHANNEL` | No | Forzar navegador: `chrome`, `msedge` |

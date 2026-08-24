@@ -37,20 +37,29 @@ jobs:
       - name: Comprobar precios
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          # Opcional: crea la variable RATIO_OBJETIVO en Settings > Variables
-          # si quieres un aviso extra al alcanzar cierto ratio HKD/EUR.
+          # Opcionales: se crean en Settings > Secrets and variables >
+          # Variables. Si no existen, el script usa sus valores por defecto.
           RATIO_OBJETIVO: ${{ vars.RATIO_OBJETIVO }}
+          UMBRAL_BAJADA_PCT: ${{ vars.UMBRAL_BAJADA_PCT }}
+          UMBRAL_BAJADA_EUR: ${{ vars.UMBRAL_BAJADA_EUR }}
         run: python check_price.py
+
+      - name: Generar grafico del historial
+        # Si el grafico falla no queremos perder la comprobacion de precios,
+        # que ya se hizo y ya notifico: por eso este paso no rompe el job.
+        continue-on-error: true
+        run: python grafico.py
 
       - name: Guardar el estado en el repo
         if: always() # tambien commitea el flag de fallo si el scraping se rompio
         run: |
-          if [[ -n "$(git status --porcelain state.json historial.json)" ]]; then
+          ARCHIVOS="state.json historial.json historial-*.png"
+          if [[ -n "$(git status --porcelain -- $ARCHIVOS)" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add state.json historial.json
-            git commit -m "Actualizar estado e historial [skip ci]"
+            git add -- $ARCHIVOS
+            git commit -m "Actualizar estado, historial y grafico [skip ci]"
             git push
           else
-            echo "Sin cambios en state.json ni historial.json."
+            echo "Sin cambios en el estado, el historial ni los graficos."
           fi

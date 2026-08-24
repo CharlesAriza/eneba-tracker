@@ -1,0 +1,32 @@
+{
+  "_comentario": [
+    "Lista de productos a vigilar. Para anadir uno nuevo basta con copiar el",
+    "bloque y ajustar los campos: no hay que tocar check_price.py.",
+    "",
+    "  id                       clave interna, se usa para separar el estado y",
+    "                           el historial de cada producto. No lo cambies",
+    "                           una vez en uso o se pierde el historico.",
+    "  nombre                   texto que sale en las notificaciones.",
+    "  url                      pagina de resultados, SIN el parametro page=.",
+    "  unidad                   moneda de la tarjeta (solo para los textos).",
+    "  denominaciones_vigiladas las que disparan alerta puntual de bajada.",
+    "  patron_titulo            regex con 2 grupos: (denominacion) y (precio).",
+    "  patron_enlace            regex sobre el href para sacar el enlace",
+    "                           directo de cada denominacion. Opcional.",
+    "                           OJO: Eneba usa dos slugs distintos para el",
+    "                           mismo tipo de tarjeta (…steam-wallet-gift-card…",
+    "                           y …steam-gift-card…), por eso el patron es",
+    "                           laxo en el prefijo."
+  ],
+  "productos": [
+    {
+      "id": "steam-hk",
+      "nombre": "Steam Wallet Hong Kong",
+      "url": "https://www.eneba.com/store/all?text=steam%20wallet%20hong%20kong",
+      "unidad": "HKD",
+      "denominaciones_vigiladas": [100, 200, 500],
+      "patron_titulo": "Steam Wallet Gift Card\\s+(\\d+)\\s+HKD.{0,80}?€\\s*([\\d.,]+)",
+      "patron_enlace": "^(/.*?-(\\d+)-hkd-steam-key-hong-kong)$"
+    }
+  ]
+}
