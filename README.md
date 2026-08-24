@@ -59,6 +59,16 @@ estado, su propio histórico y su propio gráfico.
 `state.json` y `productos.json` del propio repositorio y dibuja la evolución
 de precios y ratios, más el catálogo completo ordenado por ratio.
 
+Se puede **instalar en el móvil**: "Añadir a pantalla de inicio" desde el
+navegador. Tiene icono propio y se abre en modo standalone, sin barra de
+direcciones. Si ya tenías el atajo creado antes de esto, **bórralo y vuelve a
+añadirlo**: el icono de un atajo ya creado no se refresca solo.
+
+El icono lo genera `iconos.py` (se ejecuta a mano, no en el workflow). No
+lleva service worker a propósito: para añadir a pantalla de inicio no hace
+falta, y una capa de caché podría servir precios viejos, que es justo lo
+contrario de lo que busca el panel.
+
 Está publicada en GitHub Pages (rama `main`, carpeta raíz):
 **https://charlesariza.github.io/eneba-tracker/** — se actualiza sola cada vez
 que el workflow commitea un nuevo `historial.json`.
