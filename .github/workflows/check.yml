@@ -35,6 +35,7 @@ jobs:
           playwright install --with-deps chromium
 
       - name: Comprobar precios
+        id: precios
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           # Opcionales: se crean en Settings > Secrets and variables >
@@ -45,6 +46,11 @@ jobs:
         run: python check_price.py
 
       - name: Generar grafico del historial
+        # Solo cuando toca el resumen diario. El PNG pesa ~115 KB y git guarda
+        # una copia entera en cada commit: generarlo cada hora anadiria ~1 GB
+        # al repo por ano sin aportar nada, porque el panel web ya dibuja los
+        # datos en vivo.
+        if: steps.precios.outputs.resumen_enviado == 'true'
         # Si el grafico falla no queremos perder la comprobacion de precios,
         # que ya se hizo y ya notifico: por eso este paso no rompe el job.
         continue-on-error: true
@@ -53,7 +59,13 @@ jobs:
       - name: Guardar el estado en el repo
         if: always() # tambien commitea el flag de fallo si el scraping se rompio
         run: |
-          ARCHIVOS="state.json historial.json historial-*.png"
+          ARCHIVOS="state.json historial.json"
+          if [[ "${{ steps.precios.outputs.resumen_enviado }}" == "true" ]]; then
+            ARCHIVOS="$ARCHIVOS historial-*.png"
+            echo "Toco resumen: incluyo tambien el grafico."
+          else
+            echo "Sin resumen en esta ejecucion: no commiteo el grafico."
+          fi
           if [[ -n "$(git status --porcelain -- $ARCHIVOS)" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

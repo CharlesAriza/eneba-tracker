@@ -87,6 +87,9 @@ RATIO_OBJETIVO = env_num("RATIO_OBJETIVO", 0.0)
 # Diferencias menores a esto se consideran "igual" (ruido de redondeo).
 EPSILON = 0.005
 
+# Muestras minimas para que el "minimo historico" pueda disparar una alerta.
+MIN_MUESTRAS_HISTORICO = env_num("MIN_MUESTRAS_HISTORICO", 6, int)
+
 VENTANA_RESUMEN_HORAS = 24  # ventana que resume el push diario
 # El historico se guarda 30 dias, no 24h: hace falta para el minimo historico
 # (mejora 5), el grafico (mejora 2) y el panel web (mejora 6).
@@ -131,6 +134,21 @@ def guardar_json(ruta, datos):
     ruta.write_text(
         json.dumps(datos, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
+
+
+def exportar_salida(clave, valor):
+    """Publica un dato para los siguientes pasos del workflow.
+
+    Se usa para que el paso del grafico y el del commit sepan si esta
+    ejecucion mando el resumen diario: el PNG solo se commitea entonces.
+    Fuera de GitHub Actions no existe GITHUB_OUTPUT y no hace nada.
+    """
+    destino = os.environ.get("GITHUB_OUTPUT")
+    print("Salida para el workflow: %s=%s" % (clave, valor))
+    if not destino:
+        return
+    with open(destino, "a", encoding="utf-8") as f:
+        f.write("%s=%s\n" % (clave, valor))
 
 
 def hora_utc(epoch):
@@ -358,16 +376,16 @@ def rango(muestras, denom):
 def minimo_historico(muestras, denom, ahora):
     """Minimo de una denominacion en la retencion disponible.
 
-    Devuelve (minimo, dias_cubiertos). Si hay menos de RETENCION_DIAS de
+    Devuelve (minimo, dias_cubiertos, n_muestras). Si hay menos de RETENCION_DIAS de
     datos, devuelve los dias que haya de verdad: el mensaje debe decir la
     cobertura real, no afirmar '30 dias' cuando solo hay 2 horas.
     """
     conservadas = [m for m in muestras if str(denom) in m.get("precios", {})]
     if not conservadas:
-        return None, 0.0
+        return None, 0.0, 0
     minimo = min(m["precios"][str(denom)] for m in conservadas)
     dias = (ahora - min(m["t"] for m in conservadas)) / 86400.0
-    return minimo, dias
+    return minimo, dias, len(conservadas)
 
 
 def texto_dias(dias):
@@ -440,7 +458,7 @@ def construir_resumen(producto, muestras_24h, ofertas, enlaces, ahora):
 # --- Un producto ---------------------------------------------------------
 
 def procesar(producto, pagina, estado, historial, ahora):
-    """Procesa un producto. Devuelve True si fue bien."""
+    """Procesa un producto. Devuelve (ok, resumen_enviado)."""
     pid = producto["id"]
     unidad = producto.get("unidad", "")
     print("\n=== %s (%s) ===" % (producto["nombre"], pid))
@@ -462,7 +480,7 @@ def procesar(producto, pagina, estado, historial, ahora):
                       url_accion=producto["url"], etiqueta_accion="Abrir Eneba")
         est["fallo_previo"] = True
         hist["muestras"] = muestras
-        return False
+        return False, False
 
     print("  Total denominaciones: %d -> %s" % (len(ofertas), sorted(ofertas)))
     print("  Enlaces directos capturados: %d" % len(enlaces))
@@ -504,9 +522,26 @@ def procesar(producto, pagina, estado, historial, ahora):
 
         # Minimo historico: se compara contra el historico ANTERIOR a esta
         # lectura, que aun no se ha anadido.
-        min_hist, dias = minimo_historico(muestras, denom, ahora)
+        min_hist, dias, n_muestras = minimo_historico(muestras, denom, ahora)
         if min_hist is not None and precio <= min_hist + EPSILON:
             notas.append("📉 Precio mas bajo visto en %s" % texto_dias(dias))
+
+            # El minimo historico avisa por si solo, aunque la bajada no llegue
+            # al umbral: tocar el minimo de 30 dias es justo cuando interesa
+            # enterarse. Con dos matices para no dar la lata:
+            #  - Hacen falta MIN_MUESTRAS_HISTORICO lecturas. Un "minimo
+            #    historico" calculado sobre una sola muestra no dice nada:
+            #    siempre se cumple.
+            #  - Si el precio lleva plano en su minimo, se cumpliria cada hora.
+            #    Por eso solo dispara cuando marca un minimo NUEVO, o cuando
+            #    vuelve a el despues de haber estado por encima.
+            if n_muestras >= MIN_MUESTRAS_HISTORICO:
+                nuevo_minimo = precio < min_hist - EPSILON
+                vuelve_al_minimo = antes is not None and antes > min_hist + EPSILON
+                if nuevo_minimo or vuelve_al_minimo:
+                    hay_alerta = True
+                    if denom_alerta is None:
+                        denom_alerta = denom
 
         if RATIO_OBJETIVO and ratio >= RATIO_OBJETIVO:
             marca += " | objetivo %.2f alcanzado" % RATIO_OBJETIVO
@@ -551,6 +586,7 @@ def procesar(producto, pagina, estado, historial, ahora):
     muestras.sort(key=lambda m: m["t"])
 
     # --- Resumen diario --------------------------------------------------
+    resumen_enviado = False
     ultimo = est.get("ultimo_resumen")
     if ultimo is None:
         # Primera vez: no tiene sentido resumir 24h con una sola muestra.
@@ -565,6 +601,7 @@ def procesar(producto, pagina, estado, historial, ahora):
         notificar("Eneba: resumen 24h — %s" % producto["nombre"], cuerpo,
                   prioridad="default", tags="bar_chart", url_accion=url_res)
         est["ultimo_resumen"] = int(ahora)
+        resumen_enviado = True
     else:
         print("  Resumen no toca todavia (faltan %.1f h)."
               % (HORAS_ENTRE_RESUMENES - (ahora - ultimo) / 3600.0))
@@ -583,7 +620,7 @@ def procesar(producto, pagina, estado, historial, ahora):
     hist["muestras"] = muestras
     print("  Historial: %d muestras (retencion %d dias)."
           % (len(muestras), RETENCION_DIAS))
-    return True
+    return True, resumen_enviado
 
 
 # --- Programa principal --------------------------------------------------
@@ -605,19 +642,22 @@ def main():
     historial.setdefault("productos", {})
 
     todo_bien = True
+    hubo_resumen = False
     with sync_playwright() as p:
         navegador = abrir_navegador(p)
         contexto = preparar_contexto(navegador)
         pagina = contexto.new_page()
         try:
             for producto in productos:
-                if not procesar(producto, pagina, estado, historial, ahora):
-                    todo_bien = False
+                ok, resumen = procesar(producto, pagina, estado, historial, ahora)
+                todo_bien = todo_bien and ok
+                hubo_resumen = hubo_resumen or resumen
         finally:
             navegador.close()
 
     guardar_json(STATE_FILE, estado)
     guardar_json(HISTORIAL_FILE, historial)
+    exportar_salida("resumen_enviado", "true" if hubo_resumen else "false")
     return 0 if todo_bien else 1
 
 
