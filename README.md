@@ -14,10 +14,18 @@ precio baja respecto a la última comprobación.
    un runner de GitHub (IP de EE.UU.) vería los precios en dólares y la
    extracción fallaría. Comprobado: con `exchange=USD`, la tarjeta de 100 HKD
    pasa de `€10.58` a `$12.35`.
-3. Lee el texto visible y extrae el precio "From" de cada denominación con
-   una expresión regular (`PATRON_TARJETA`).
-4. Compara con `state.json`, que guarda lo que se vio la vez anterior.
-5. Si algún precio bajó, manda una notificación push a ntfy.sh.
+3. **Recorre todas las páginas de resultados** (hoy son 2, con 34
+   denominaciones) y extrae el precio "From" de cada una con una expresión
+   regular (`PATRON_TARJETA`).
+4. Compara con `state.json`, que guarda lo que se vio la vez anterior, y
+   acumula cada lectura en `historial.json`.
+5. Manda dos tipos de push:
+   - **Alerta**: cuando baja el precio de 100, 200 o 500 HKD.
+   - **Resumen diario**: una vez cada ~24h, con mínimos y máximos de la
+     ventana y la tarjeta de mejor ratio **de las 34**, no solo de las tres
+     vigiladas. Se manda aunque no haya habido ninguna bajada.
+6. Descarta del histórico las muestras de más de 24h para que el archivo no
+   crezca sin límite.
 
 El `locale` del navegador (`en-GB` vs `es-ES`) **no** influye: comprobado que
 ambos devuelven títulos en inglés y precios con punto decimal. Lo que manda es
@@ -106,8 +114,10 @@ no cada 2 horas).
 
 ## 6. Frecuencia
 
-Por defecto corre cada 2 horas (`cron: "0 */2 * * *"`). No bajes de 30-60
-minutos para no saturar Eneba. Dos avisos de GitHub:
+**Ahora mismo corre cada hora (`cron: "0 * * * *"`), y es TEMPORAL**: se subió
+así para validar el resumen diario acumulando muestras más rápido. Cuando esa
+fase termine, volver a `0 */2 * * *`. No bajes de 30-60 minutos para no
+saturar Eneba. Dos avisos de GitHub:
 
 - Los cron de Actions no son puntuales; pueden retrasarse.
 - Si el repo pasa 60 días sin actividad, GitHub desactiva los workflows
@@ -120,7 +130,8 @@ minutos para no saturar Eneba. Dos avisos de GitHub:
 | `NTFY_TOPIC` | Sí (para recibir push) | Topic de ntfy.sh |
 | `NTFY_SERVER` | No | Servidor ntfy alternativo (por defecto `https://ntfy.sh`) |
 | `RATIO_OBJETIVO` | No | Avisa al alcanzar ese ratio HKD/€ |
-| `ENEBA_URL` | No | Cambiar la página que se consulta |
+| `ENEBA_URL` | No | Cambiar la página que se consulta (sin `page=`) |
+| `ENEBA_MAX_PAGINAS` | No | Tope de páginas a recorrer (por defecto 5) |
 | `PLAYWRIGHT_CHANNEL` | No | Forzar navegador: `chrome`, `msedge` |
 | `CI` | La pone GitHub | Si existe, desactiva el fallback a Chrome/Edge |
 
@@ -128,5 +139,14 @@ minutos para no saturar Eneba. Dos avisos de GitHub:
 
 - El precio que se lee es el **"From"** de la ficha (la oferta más barata
   del listado), no incluye comisiones de pago ni Eneba Prime.
-- `state.json` lo commitea el workflow automáticamente para recordar el
-  último precio entre ejecuciones.
+- `state.json` e `historial.json` los commitea el workflow automáticamente
+  para recordar el estado entre ejecuciones.
+- El `RATIO_OBJETIVO` hay que calibrarlo con los valores que ve el runner
+  de GitHub (~9,0 HKD/€), no con los que ves tú desde España (~9,45). Ver
+  el aviso de precio orientativo más abajo.
+- **Los precios dependen de la IP.** El runner de GitHub está en EE.UU. y
+  ve precios ~5 % por encima de los de España. No es corregible con
+  cookies: probado con `region=spain`, `united-states` y `germany`, los
+  tres dan el mismo precio. Por eso las notificaciones llevan el aviso
+  "precio orientativo, verificar en Eneba antes de comprar". La detección
+  de bajadas sigue siendo válida porque compara runner contra runner.

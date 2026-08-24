@@ -5,6 +5,327 @@ Registro de salidas de Claude Code para el chat de Claude que hace de
 hizo, qué está verificado, qué NO está verificado y qué bloquea el avance.
 
 Proyecto: `C:\Users\pepo1\Documents\Eneba Checker`
+Repo: https://github.com/CharlesAriza/eneba-tracker (privado)
+
+---
+
+## Entrada 008 — 2026-08-24 — Aviso de precio orientativo añadido y subido
+
+**Estado:** hecho. Commit `645e208` en `main` del repo remoto.
+
+### Cambio
+
+La notificación de bajada termina ahora con:
+
+```
+⚠️ Precio orientativo (servidor en EE.UU.), verificar en Eneba antes de comprar.
+```
+
+Ejemplo de cómo queda el cuerpo del push:
+
+```
+100 HKD: 11.13 EUR (8.98 HKD/€) [BAJA desde 12.58]
+200 HKD: 22.16 EUR (9.03 HKD/€) [BAJA desde 23.06]
+500 HKD: 55.23 EUR (9.05 HKD/€) [igual]
+Mejor ratio: 500 HKD (9.05 HKD/€)
+⚠️ Precio orientativo (servidor en EE.UU.), verificar en Eneba antes de comprar.
+```
+
+Con esto queda **implícitamente adoptada la opción (a)** de la entrada 007:
+la alerta se trata como señal relativa y el aviso lo deja explícito en el
+propio mensaje, en vez de cambiar la arquitectura o inventar un factor de
+corrección.
+
+### Detalle técnico
+
+El aviso va en el **cuerpo** del mensaje, no en la cabecera `Title`. Es
+necesario: las cabeceras HTTP solo admiten ASCII y el emoji ⚠️ las rompería.
+El cuerpo viaja como UTF-8 (84 bytes esa línea) y ya está comprobado en
+ejecuciones anteriores que ntfy lo muestra bien — el símbolo € llegaba
+correcto al móvil.
+
+Solo afecta a la notificación de bajada de precio. La notificación de
+"tracker roto" no la lleva, porque ahí no hay ningún precio del que avisar.
+
+### Verificación
+
+Cambio menor, sin ejecución completa (criterio del PM). Se comprobó:
+- La sintaxis del archivo (`ast.parse`).
+- Que la línea está en el código y codifica bien en UTF-8.
+- Que el push a `main` subió: `645e208`, 1 archivo, 7 inserciones.
+
+La primera confirmación en vivo llegará con la próxima bajada real que
+detecte el cron.
+
+### Bloqueos
+
+- Ninguno.
+
+---
+
+## Entrada 007 — 2026-08-24 — Desplegado y funcionando. Hallazgo: el precio depende de la IP
+
+**Estado:** los 8 puntos del PM ejecutados y verificados. El sistema está vivo
+en GitHub Actions. **Pero el despliegue ha destapado un problema de fondo que
+requiere una decisión del usuario** (detalle al final).
+
+**Repo:** https://github.com/CharlesAriza/eneba-tracker (privado)
+**Run:** https://github.com/CharlesAriza/eneba-tracker/actions/runs/32757200120
+(✅ éxito, 44 s)
+
+### Pasos ejecutados
+
+| Paso | Resultado |
+|---|---|
+| `gh auth status` | ✅ `CharlesAriza`, scopes `gist, read:org, repo, workflow` |
+| `gh repo create` privado | ✅ verificado `isPrivate=true`, rama `main` |
+| `git push -u origin main` | ✅ commit `58bcc1b` subido |
+| `gh secret set NTFY_TOPIC` | ✅ aparece en `gh secret list` |
+| `gh workflow run check.yml` | ✅ run 32757200120 |
+| Espera + lectura del log | ✅ todos los pasos en verde |
+
+### Los 4 puntos de confirmación del PM
+
+**1. Chromium empaquetado, sin fallback — ✅ CONFIRMADO**
+```
+Navegador: chromium de Playwright
+```
+Es la rama de `CI` detectado. No aparece ningún "No se pudo abrir chromium".
+
+**2. Precios en EUR, no USD — ✅ CONFIRMADO**
+```
+100 HKD -> 11.13 EUR (8.98 HKD/EUR) [BAJA desde 12.58]
+200 HKD -> 22.16 EUR (9.03 HKD/EUR) [BAJA desde 23.06]
+500 HKD -> 55.23 EUR (9.05 HKD/EUR) [sube desde 54.82]
+```
+La cookie `exchange=EUR` hace su trabajo desde una IP de EE.UU. Sin ella,
+esto habría salido en dólares y el run habría fallado. La corrección de la
+entrada 003 queda validada en producción.
+
+**3. Push usando el secreto — ✅ CONFIRMADO**
+```
+NTFY_TOPIC: ***
+Push enviado a https://ntfy.sh/***
+```
+GitHub enmascara el valor en el log, como debe ser.
+
+**4. Commit automático de `state.json` — ✅ CONFIRMADO**
+```
+[main ed86295] Actualizar state.json [skip ci]
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+```
+Autor: `github-actions[bot]`. El truco del estado falseado funcionó: se
+ejercitó el camino real del commit en vez de imprimir "sin cambios".
+
+### 🟠 Hallazgo: el precio depende de la IP desde la que se consulta
+
+Los precios del runner no coinciden con los de España:
+
+| | desde España | desde el runner (EE.UU.) | dif. |
+|---|---|---|---|
+| 100 HKD | 10,58 € | 11,13 € | +5,2 % |
+| 200 HKD | 21,06 € | 22,16 € | +5,2 % |
+| 500 HKD | 52,80 € | 55,23 € | +4,6 % |
+| ratio | ~9,47 HKD/€ | ~9,02 HKD/€ | |
+
+No es movimiento de mercado: es un desfase uniforme (~5 %) y se reproduce.
+
+**Se investigó si era corregible con cookies. No lo es.** Prueba ejecutada
+desde España mandando `region=spain`, `region=united-states` y
+`region=germany`: los tres devuelven **10,58 €**. La cookie se conserva
+(el servidor no la sobrescribe) pero **no influye en el precio**. Lo decide
+la geolocalización por IP en el servidor, seguramente porque el conjunto de
+ofertas disponibles varía por país de compra.
+
+**Qué implica:**
+- La **detección de bajadas sigue siendo válida**: el workflow compara
+  precios de runner contra precios de runner, siempre la misma referencia.
+  `state.json` en el repo ya guarda la serie de EE.UU., coherente consigo misma.
+- Las **cifras absolutas del push son ~5 % más altas** de lo que el usuario
+  pagaría de verdad.
+- **`RATIO_OBJETIVO` queda inutilizable tal cual**: un objetivo de 9,60
+  calibrado con lo que se ve en España no saltaría nunca desde Actions, donde
+  el ratio ronda 9,02. Si se usa, hay que calibrarlo con los valores del
+  runner, no con los de casa.
+
+**Opciones (pendiente de decisión del usuario):**
+- **a)** Dejarlo así y tratar la alerta como señal relativa ("algo se movió,
+  entra a mirar el precio real"). Cero trabajo extra. Recomendada.
+- **b)** Ejecutarlo en el PC del usuario con el Programador de tareas de
+  Windows en vez de Actions: precios correctos de España, pero solo corre con
+  el ordenador encendido.
+- **c)** Proxy con salida en España dentro del workflow. Resuelve el fondo
+  pero añade dependencia externa, coste y fragilidad. No recomendada.
+
+Se descarta explícitamente aplicar un factor de corrección del 5 %: sería
+inventarse un precio que nadie ha visto.
+
+### Estado de verificación
+
+**Verificado en producción:** todo el circuito, de Eneba a ntfy, ejecutándose
+solo en GitHub Actions cada 2 horas.
+
+**Pendiente de confirmar por el usuario:** que el push del run 32757200120 le
+llegó al móvil en el topic nuevo (`eneba-hkd-1e22f7yall`).
+
+### Bloqueos
+
+- Ninguno técnico. Solo la decisión a/b/c sobre el desfase por IP.
+
+### Concepto enseñado
+
+Desplegar no es el final de las pruebas, es una prueba en sí misma. El mismo
+código, en otra máquina y otra red, dio precios distintos — y eso solo se ve
+comparando la ejecución real contra la local. Si se hubiera dado el despliegue
+por bueno al ver el run en verde, el desfase habría pasado desapercibido.
+
+---
+
+## Entrada 006 — 2026-08-24 — Secuencia de GitHub NO ejecutada: sigue sin login
+
+**Estado:** ningún paso de la lista del PM se ha ejecutado. La secuencia se
+detuvo en su primer punto, que es precisamente el que existe para eso.
+
+### Punto 1 — `gh auth status`: FALLA
+
+```
+You are not logged into any GitHub hosts. To log in, run: gh auth login
+```
+
+Sin cambios respecto a la entrada 005. También se comprobó que no hay
+variables `GH_TOKEN` ni `GITHUB_TOKEN` en el entorno que pudieran servir de
+alternativa: no hay ninguna.
+
+### Puntos 2 al 7: no ejecutados
+
+`gh repo create`, push, `gh secret set`, `gh workflow run` y la lectura del
+log **no se han intentado**. Todos requieren autenticación; lanzarlos habría
+producido una cadena de errores sin información útil.
+
+No hay URL de repo que reportar porque no se ha creado ningún repo.
+
+### Qué se necesita
+
+Que el usuario ejecute `gh auth login` en su terminal y complete el flujo en
+el navegador. Es interactivo y con credenciales suyas: no procede que lo haga
+Claude Code ni manejar un token en su nombre.
+
+### Lo que sigue listo y sin tocar
+
+- Commit local `58bcc1b` en `main`, con los 7 archivos.
+- `state.json` commiteado con los precios +2 € a propósito, para que la
+  primera ejecución del workflow valide push y commit automático (ver
+  entrada 005).
+- Topic `eneba-hkd-1e22f7yall` operativo y confirmado.
+
+En cuanto haya login, los 6 pasos restantes se encadenan sin más decisiones
+pendientes.
+
+### Bloqueos
+
+- `gh auth login`. Único bloqueo, sin alternativa por parte de Claude Code.
+
+---
+
+## Entrada 005 — 2026-08-24 — Push confirmado en el móvil. GitHub bloqueado por login
+
+**Estado:** el usuario **confirma que le llegó el push al móvil**. Sistema
+validado de punta a punta en local. Topic cambiado por uno no adivinable.
+Repo local creado y commiteado. **La subida a GitHub está bloqueada: `gh` no
+está autenticado y el login es interactivo, lo tiene que hacer el usuario.**
+
+### Paso 2 — confirmado por el usuario: SÍ llegó
+
+Con esto queda validada la cadena completa en local:
+Eneba → extracción → comparación → ntfy → móvil.
+
+### Topic cambiado (decisión del usuario)
+
+El usuario optó por sustituir `eneba-hkd-checker` por uno con sufijo
+aleatorio. Nuevo topic:
+
+```
+eneba-hkd-1e22f7yall
+```
+
+Generado con `secrets.choice` (aleatorio criptográfico, no `random`). Se le
+mandó un push de prueba y **está confirmado en el servidor de ntfy**:
+
+```
+title='Topic nuevo activo'
+Si ves esto, el topic eneba-hkd-1e22f7yall funciona. [...]
+```
+
+Pendiente: que el usuario se suscriba al nuevo en la app y borre el antiguo.
+
+### Repo local: creado y commiteado
+
+`git init -b main` + commit inicial (`58bcc1b`) con los 7 archivos:
+`check_price.py`, `requirements.txt`, `.github/workflows/check.yml`,
+`README.md`, `.gitignore`, `PARA-PM.md`, `state.json`.
+
+**Decisión deliberada sobre `state.json`:** se ha commiteado con los precios
+**+2 € sobre los reales**. Motivo: el PM pidió confirmar que el paso de commit
+automático funciona, pero si el estado subido ya fuera correcto, la primera
+ejecución en Actions no encontraría bajada, no cambiaría el archivo, y el paso
+imprimiría "sin cambios, no hay nada que commitear" — no se habría verificado
+nada. Con el estado falseado, la primera ejecución:
+
+1. detecta una bajada → **valida que el push sale desde Actions con el secreto**,
+2. reescribe `state.json` → **valida el commit automático del bot**.
+
+Después el archivo se corrige solo con los precios reales. Está explicado en
+el mensaje del commit para que no despiste a nadie que lo lea luego.
+
+### 🔴 Bloqueo: `gh` sin autenticar
+
+```
+gh auth status -> You are not logged into any GitHub hosts.
+```
+
+`gh auth login` es un flujo interactivo con credenciales. No procede
+ejecutarlo por el usuario ni manejar un token suyo. **Lo tiene que hacer él.**
+
+Todo lo demás (crear repo privado, push, secreto, `workflow_dispatch`,
+comprobar el log del commit) queda listo para ejecutarse del tirón en cuanto
+esté autenticado.
+
+### Estado de verificación actualizado
+
+**Verificado:**
+- Extracción de precios reales.
+- Detección de bajada.
+- El locale no afecta; la cookie `exchange` sí controla la moneda.
+- El modo CI no cae a Chrome/Edge.
+- `state.json` no gitignorado.
+- Push de ntfy: enviado, guardado en el servidor **y recibido en el móvil**.
+- Topic nuevo operativo (confirmado en servidor).
+- Commit local con los 7 archivos.
+
+**Sin verificar (todo depende del login de GitHub):**
+- Ejecución del workflow en Actions.
+- Que el Chromium empaquetado funcione en el runner.
+- Que el push salga desde Actions leyendo el secreto.
+- El commit automático de `state.json` por el bot.
+
+### Bloqueos
+
+- `gh auth login` pendiente (solo el usuario).
+- Suscripción al topic nuevo en la app del móvil.
+
+### Siguiente paso
+
+Usuario: suscribirse a `eneba-hkd-1e22f7yall` en ntfy y ejecutar
+`gh auth login`. Después, Claude Code encadena: `gh repo create` privado +
+push + `gh secret set NTFY_TOPIC` + `gh workflow run` + lectura del log.
+
+### Concepto enseñado
+
+Para probar de verdad un paso condicional ("commitea solo si algo cambió") hay
+que provocar la condición. Un workflow que imprime "no había nada que hacer"
+no ha demostrado que sepa hacerlo. Por eso el estado inicial va falseado a
+propósito: es la única forma de que la primera ejecución ejercite el camino
+que interesa comprobar.
 
 ---
 

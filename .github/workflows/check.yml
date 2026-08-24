@@ -2,9 +2,11 @@ name: Check Eneba price
 
 on:
   schedule:
-    # Cada 2 horas. Ojo: GitHub no garantiza la puntualidad de los cron,
-    # puede retrasarse bastantes minutos si hay cola.
-    - cron: "0 */2 * * *"
+    # TEMPORAL: cada hora, para la fase de prueba del resumen diario.
+    # Volver a "0 */2 * * *" cuando termine esa fase.
+    # Ojo: GitHub no garantiza la puntualidad de los cron, puede retrasarse
+    # bastantes minutos si hay cola.
+    - cron: "0 * * * *"
   workflow_dispatch: # permite lanzarlo a mano desde la pestaña Actions
 
 # Necesario para que el bot pueda commitear state.json de vuelta al repo.
@@ -43,12 +45,12 @@ jobs:
       - name: Guardar el estado en el repo
         if: always() # tambien commitea el flag de fallo si el scraping se rompio
         run: |
-          if [[ -n "$(git status --porcelain state.json)" ]]; then
+          if [[ -n "$(git status --porcelain state.json historial.json)" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add state.json
-            git commit -m "Actualizar state.json [skip ci]"
+            git add state.json historial.json
+            git commit -m "Actualizar estado e historial [skip ci]"
             git push
           else
-            echo "state.json sin cambios, no hay nada que commitear."
+            echo "Sin cambios en state.json ni historial.json."
           fi
