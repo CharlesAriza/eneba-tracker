@@ -9,6 +9,225 @@ Repo: https://github.com/CharlesAriza/eneba-tracker (privado)
 
 ---
 
+## Entrada 010 — 2026-08-24 — Las 6 mejoras implementadas y verificadas en CI
+
+**Estado:** las 6 implementadas, probadas y en `main`. Commits `2cb8cda` y
+`1ed0ce9`. **Dos cosas requieren decisión del usuario** (Pages y el peso del
+PNG). El punto 6 está construido y probado pero **no publicado**.
+
+### Resumen
+
+| # | Mejora | Estado |
+|---|---|---|
+| 1 | Umbral de alerta | ✅ probado |
+| 2 | Gráfico PNG | ✅ probado, ⚠️ ver peso |
+| 3 | Botón en el push | ✅ probado |
+| 4 | Multi-producto | ✅ probado, con migración |
+| 5 | Mínimo histórico | ✅ probado |
+| 6 | Panel GitHub Pages | ✅ construido y probado, ⏸️ **sin publicar** |
+
+### 🔴 Bug encontrado en CI (y por qué mereció la pena ejecutarlo)
+
+El primer despliegue **falló**:
+
+```
+UMBRAL_BAJADA_PCT = float(os.environ.get("UMBRAL_BAJADA_PCT", "1.5"))
+ValueError: could not convert string to float: ''
+```
+
+GitHub Actions **inyecta las variables no definidas como cadena vacía**, no
+las omite. Un `${{ vars.UMBRAL_BAJADA_PCT }}` inexistente llega como `""`, y
+el valor por defecto de `os.environ.get` nunca entra en juego porque la
+variable sí existe: existe vacía.
+
+Corregido con `env_num()`, que centraliza las 5 lecturas numéricas: vacío →
+valor por defecto, y un valor mal escrito avisa y continúa en vez de tumbar
+la comprobación de precios. Verificado con las variables vacías y con
+`UMBRAL_BAJADA_PCT="dos coma cinco"`.
+
+Esto no se habría visto en local: allí las variables sencillamente no existen.
+
+### 1. Umbral de alerta
+
+La bajada debe superar `max(1,5 % del precio anterior, 0,10 €)`.
+
+**Por qué las dos condiciones y no solo euros:** las denominaciones van de
+0,60 € a 124 €. Un umbral fijo de 0,20 € es el 2 % en la tarjeta de 100 HKD
+(relevante) pero el 0,4 % en la de 500 (ruido). El porcentaje escala solo. El
+suelo en euros evita avisar por redondeos en las baratas, donde un 1,5 % son
+dos céntimos. El 1,5 % sale de lo observado el 24-08: los movimientos entre
+ejecuciones consecutivas rondaban el 0,8 %.
+
+Prueba unitaria (5 casos, todos correctos):
+
+```
+OK    100: 11.13 -> 11.08 | baja 0.05 (0.45%) | umbral 0.17 | alerta=False
+OK    100: 11.13 -> 10.90 | baja 0.23 (2.07%) | umbral 0.17 | alerta=True
+OK    500: 55.23 -> 54.90 | baja 0.33 (0.60%) | umbral 0.83 | alerta=False
+OK    500: 55.23 -> 54.20 | baja 1.03 (1.86%) | umbral 0.83 | alerta=True
+OK      5:  0.60 ->  0.57 | baja 0.03 (5.00%) | umbral 0.10 | alerta=False
+```
+
+El tercer caso es el interesante: 0,33 € de bajada **no** avisa en la tarjeta
+de 500, aunque supere los 0,20 € que se proponían como umbral fijo.
+
+Prueba de punta a punta con el script real y la web de verdad:
+- Bajada del 0,5 % → `baja 0.05 desde 10.63 (bajo umbral 0.16)` + *"Sin
+  bajadas por encima del umbral. No envio alerta."*
+- Bajada del 5 % → `BAJA 0.53 desde 11.11` + push enviado.
+
+### 2. Gráfico (`grafico.py` → `historial-<id>.png`)
+
+Script aparte y paso con `continue-on-error`: si matplotlib falla, la
+vigilancia de precios (que ya notificó) no se cae con él.
+
+**Primer intento salió ilegible** y se corrigió: pintaba las 34
+denominaciones porque las muestras anteriores a la reestructuración las
+guardaban todas, y la leyenda de 34 entradas reventaba la figura. Ahora usa
+solo las vigiladas. Revisado el PNG resultante: dos paneles (ratio y precio),
+leyenda legible, mínimo anotado por serie y el aviso de precio orientativo al
+pie. El título dice "ultimas 1 h" cuando no hay días suficientes, en vez de
+"ultimos 0 dias".
+
+### ⚠️ Decisión pendiente: el PNG pesa
+
+El PNG ocupa **~116 KB** y se commitea en cada ejecución. Con el cron horario:
+
+| cadencia | por día | por mes | por año |
+|---|---|---|---|
+| cada hora (ahora) | 2,8 MB | 84 MB | 1 GB |
+| cada 2 h | 1,4 MB | 42 MB | 500 MB |
+| solo con el resumen diario | 116 KB | 3,5 MB | 42 MB |
+
+Git no comprime PNG (ya viene comprimido) y **cada commit guarda una copia
+entera**: el historial no se puede podar sin reescribir el repo.
+
+Se implementó como pedía el encargo (commit en cada ejecución), pero
+**recomiendo commitear el PNG solo cuando se manda el resumen diario**: la
+imagen es para verla de vez en cuando en el repo, y quien quiera el dato al
+minuto tiene el panel web, que se dibuja en vivo. Es un cambio de tres líneas.
+
+### 3. Botón en el push
+
+Cabecera `Actions` de ntfy. Verificado consultando lo que **guardó el
+servidor**, no solo que el POST no fallara:
+
+```json
+{"action": "view", "label": "Comprar en Eneba", "clear": true,
+ "url": "https://www.eneba.com/steam-gift-card-steam-wallet-gift-card-100-hkd-steam-key-hong-kong"}
+```
+
+Y esa URL responde **HTTP 200**, no es un enlace roto. El botón apunta a la
+ficha de la denominación que bajó (o a la de mejor ratio en el resumen), no
+al listado.
+
+**Hallazgo:** Eneba usa **dos slugs distintos** para el mismo tipo de tarjeta
+(`…steam-wallet-gift-card-25-hkd…` y `…steam-gift-card-25-hkd…`). El primer
+patrón, calcado del que se veía en la página 1, capturaba **22 de 34**
+enlaces. Con el patrón laxo se capturan **34 de 34**, confirmado también en CI.
+
+### 4. Multi-producto
+
+Los productos se declaran en `productos.json`; el estado y el histórico van
+*namespaced* por `id`. Añadir uno no requiere tocar código.
+
+Incluye **migración del formato antiguo**: sin ella, activar multi-producto
+habría tirado el histórico ya acumulado. Verificada — el log dijo
+`Migrando historial.json al formato multi-producto (id 'steam-hk')` y las
+muestras previas se conservaron.
+
+### 5. Mínimo histórico
+
+Compara contra el mínimo de la retención disponible y **dice la cobertura
+real**: `📉 Precio mas bajo visto en 1 hora`, no "en 30 días". El caso de
+menos de 30 días de datos —el actual— es el que se ha probado; funciona.
+
+**La retención pasó de 24 h a 30 días.** Era incompatible: el encargo previo
+podaba a 24 h, y el mínimo de 30 días, el gráfico y el panel necesitan más.
+Para que el archivo no se dispare, **el histórico guarda solo las 3
+denominaciones vigiladas**, no las 34: se commitea cada hora y las otras 31
+solo se usan en la lectura actual (que sí se guarda entera en `state.json`).
+
+### 🟠 Interacción entre las mejoras 1 y 5 que conviene decidir
+
+El mínimo histórico **es una línea dentro del push, no un disparador**, tal
+como se pidió. Pero ahora que existe el umbral, puede darse esto: el precio
+toca su mínimo de 30 días con una bajada del 0,5 % → no se supera el umbral →
+no se manda push → **la línea del mínimo histórico no se ve nunca**.
+
+Implementado literalmente como se pidió. Si se quiere que un mínimo de 30
+días dispare push por sí solo (que es cuando más interesa saberlo), es un
+`if` de una línea. Queda a decisión del PM.
+
+### 6. Panel web — construido y probado, SIN publicar
+
+`index.html`: HTML+JS sin frameworks ni dependencias, gráficos SVG dibujados
+a mano, tema claro/oscuro automático, selector de rango (24 h / 7 d / 30 d).
+Lee `historial.json`, `state.json` y `productos.json` del propio repo.
+
+Probado sirviéndolo por HTTP en local (`python -m http.server`), que es
+exactamente como funcionará en Pages. Carga **datos reales**, sin errores de
+consola:
+
+- Tarjetas con precio, ratio, min/max del rango y enlace a Eneba.
+- "Mejor ratio del catálogo: 50 HKD — 9,58 HKD/€, 34 comparadas".
+- Dos gráficos SVG con ejes y etiquetas.
+- Tabla de las 34 denominaciones ordenada por ratio, cada una enlazada.
+
+**No se ha publicado, y hace falta una decisión del usuario.** Dos razones:
+
+1. **Pages en repositorio privado requiere plan de pago** (Pro o superior).
+   No se pudo confirmar el plan: el token de `gh` no tiene el scope
+   `read:user` que expone ese dato.
+2. Si el plan no lo permite, la única vía gratuita es **hacer público el
+   repositorio**, y eso expondría todo su contenido. Publicar es
+   prácticamente irreversible (queda cacheado e indexado), así que no se hace
+   sin permiso expreso.
+
+Contenido que quedaría expuesto si se hiciera público: el código, los
+precios de Eneba y este registro. **El topic de ntfy NO**: vive en un secreto
+de Actions y en el log sale enmascarado. Aun así, la decisión es del usuario.
+
+Mientras tanto el panel se ve en local con `python -m http.server 8000`.
+
+### Verificación final en CI (run 32778592046, éxito)
+
+```
+Navegador: chromium de Playwright
+Total denominaciones: 34
+Enlaces directos capturados: 34
+100 HKD -> 11.13 EUR (8.98/€) [sube desde 10.58]
+Sin bajadas por encima del umbral. No envio alerta.
+Historial: 6 muestras (retencion 30 dias).
+steam-hk -> historial-steam-hk.png (6 muestras, 1.3 h)
+[main 8f3c4a6] Actualizar estado, historial y grafico [skip ci]
+ 3 files changed
+```
+
+Los 34 enlaces también se capturan desde el runner, y el commit ya incluye
+los **tres** archivos (estado, histórico y PNG).
+
+### Pendientes
+
+- **Devolver el cron a `0 */2 * * *`** cuando el usuario dé por terminada la
+  fase de prueba. Sigue marcado como TEMPORAL.
+- Decisión sobre el peso del PNG (recomendación: commitear solo con el
+  resumen diario).
+- Decisión sobre GitHub Pages (plan de pago vs. repo público).
+- Decisión sobre si el mínimo histórico debe disparar push por sí solo.
+- Confirmar que el botón "Comprar en Eneba" se ve y funciona en el móvil: se
+  mandó un push real al topic; lo del servidor está verificado, lo de la app
+  solo puede confirmarlo el usuario.
+
+### Concepto enseñado
+
+Una variable de entorno vacía no es lo mismo que una variable ausente, y
+`os.environ.get(x, defecto)` solo cubre el segundo caso. GitHub Actions
+produce el primero, así que el fallo únicamente aparecía en producción. Es el
+argumento de siempre: ejecutar en el entorno real, no solo en el propio.
+
+---
+
 ## Entrada 009 — 2026-08-24 — Resumen 24h, histórico y catálogo completo
 
 **Estado:** los 7 puntos implementados, probados y subidos. Commit `4ae23cc`
