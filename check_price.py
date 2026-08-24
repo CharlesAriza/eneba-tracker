@@ -261,6 +261,13 @@ def main():
     mejor_ratio = int(mejor_clave) / mejor_precio
     lineas.append("Mejor ratio: %s HKD (%.2f HKD/€)" % (mejor_clave, mejor_ratio))
 
+    # El precio que ve el runner de GitHub (IP de EE.UU.) va ~5% por encima
+    # del que se ve desde Espana, y no hay cookie que lo corrija: lo decide la
+    # geolocalizacion del servidor. La alerta sirve como senal relativa, no
+    # como cifra final.
+    lineas.append("⚠️ Precio orientativo (servidor en EE.UU.), "
+                  "verificar en Eneba antes de comprar.")
+
     primera_vez = not anteriores
     if primera_vez:
         print("Primera ejecucion: guardo el estado, sin comparar.")
