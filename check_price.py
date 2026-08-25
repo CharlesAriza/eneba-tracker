@@ -47,6 +47,19 @@ STATE_FILE = AQUI / "state.json"
 HISTORIAL_FILE = AQUI / "historial.json"
 
 
+def env_txt(nombre, defecto):
+    """Lee una variable de entorno de texto tratando la cadena vacia como si
+    no estuviera.
+
+    Mismo motivo que env_num: GitHub Actions inyecta las variables no
+    definidas como cadena vacia, no las omite, y entonces el valor por
+    defecto de os.environ.get nunca llega a usarse. Con el silencio nocturno
+    eso era peor que un error visible: SILENCIO_INICIO="" desactivaba la
+    franja en silencio y el sistema parecia funcionar.
+    """
+    return (os.environ.get(nombre) or "").strip() or defecto
+
+
 def env_num(nombre, defecto, tipo=float):
     """Lee una variable de entorno numerica tratando la cadena vacia como si
     no estuviera.
@@ -121,9 +134,9 @@ DIAS_ENTRE_RESUMENES_SEMANALES = env_num("DIAS_ENTRE_RESUMENES_SEMANALES", 6.9)
 # de offset dos veces al ano (+1 en invierno, +2 en verano), asi que restar un
 # numero fijo de horas fallaria medio ano. Se usa zoneinfo con la base de
 # datos IANA (paquete tzdata, en requirements.txt: Windows no la trae).
-ZONA_USUARIO = os.environ.get("ZONA_HORARIA", "Europe/Madrid")
-SILENCIO_INICIO = os.environ.get("SILENCIO_INICIO", "00:00").strip()
-SILENCIO_FIN = os.environ.get("SILENCIO_FIN", "08:00").strip()
+ZONA_USUARIO = env_txt("ZONA_HORARIA", "Europe/Madrid")
+SILENCIO_INICIO = env_txt("SILENCIO_INICIO", "00:00")
+SILENCIO_FIN = env_txt("SILENCIO_FIN", "08:00")
 
 # Tope de avisos en cola. Si algo va mal y se acumulan, mejor perder los mas
 # viejos que guardar un state.json que crece sin control.
