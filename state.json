@@ -3,7 +3,7 @@
     "steam-hk": {
       "ultimo_resumen": 1787607179,
       "precios": {
-        "100": 11.11,
+        "100": 11.09,
         "200": 22.33,
         "500": 55.18
       },
@@ -11,7 +11,7 @@
         "5": 0.62,
         "10": 1.35,
         "15": 2.66,
-        "20": 2.79,
+        "20": 2.78,
         "25": 4.06,
         "35": 5.96,
         "40": 4.37,
@@ -20,8 +20,8 @@
         "60": 7.51,
         "70": 8.64,
         "80": 8.79,
-        "100": 11.11,
-        "110": 14.65,
+        "100": 11.09,
+        "110": 14.64,
         "120": 13.36,
         "125": 17.69,
         "150": 17.34,
@@ -87,7 +87,7 @@
         "950": "https://www.eneba.com/steam-gift-card-steam-gift-card-950-hkd-steam-key-hong-kong",
         "1000": "https://www.eneba.com/steam-gift-card-steam-wallet-gift-card-1000-hkd-steam-key-hong-kong"
       },
-      "actualizado": "2026-08-25 18:33 UTC",
+      "actualizado": "2026-08-25 19:27 UTC",
       "ultimo_resumen_semanal": 1787648539
     }
   },
