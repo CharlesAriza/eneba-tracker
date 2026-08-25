@@ -43,6 +43,11 @@ jobs:
           RATIO_OBJETIVO: ${{ vars.RATIO_OBJETIVO }}
           UMBRAL_BAJADA_PCT: ${{ vars.UMBRAL_BAJADA_PCT }}
           UMBRAL_BAJADA_EUR: ${{ vars.UMBRAL_BAJADA_EUR }}
+          # Silencio nocturno. En hora local, no del runner: el script hace la
+          # conversion con zoneinfo y respeta el cambio de horario.
+          SILENCIO_INICIO: ${{ vars.SILENCIO_INICIO }}
+          SILENCIO_FIN: ${{ vars.SILENCIO_FIN }}
+          ZONA_HORARIA: ${{ vars.ZONA_HORARIA }}
         run: python check_price.py
 
       - name: Generar grafico del historial

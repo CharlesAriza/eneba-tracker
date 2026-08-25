@@ -21,14 +21,15 @@ precio baja respecto a la última comprobación.
    regular (`PATRON_TARJETA`).
 4. Compara con `state.json`, que guarda lo que se vio la vez anterior, y
    acumula cada lectura en `historial.json`.
-5. Manda dos tipos de push, **ambos con botón "Comprar en Eneba"** que abre
-   la ficha exacta del producto:
+5. Manda tres tipos de push, **todos con botón "Comprar en Eneba"** que abre
+   la ficha exacta del producto, y **todos sujetos al silencio nocturno**:
    - **Alerta**: cuando baja el precio de 100, 200 o 500 HKD **por encima del
      umbral** (ver abajo). Si el precio iguala el mínimo de los últimos 30
      días, añade una línea "📉 Precio más bajo visto en N días".
    - **Resumen diario**: una vez cada ~24h, con mínimos y máximos de la
      ventana y la tarjeta de mejor ratio **de las 34**, no solo de las tres
      vigiladas. Se manda aunque no haya habido ninguna bajada.
+   - **Resumen semanal**: lo mismo agregando 7 días.
 6. Descarta del histórico las muestras de más de **30 días**.
 
 ## Umbral de alerta
@@ -45,6 +46,55 @@ el 0,4 % en la de 500 (ruido) — el porcentaje escala solo. Y el suelo en euros
 evita avisar por redondeos en las tarjetas baratas, donde un 1,5 % son dos
 céntimos. El 1,5 % sale de lo observado el 24-08-2026 entre ejecuciones
 consecutivas: los movimientos normales rondaban el 0,8 %.
+
+## Silencio nocturno
+
+Entre las **00:00 y las 08:00 hora de España** no se envía ningún push. El
+workflow **sigue corriendo con normalidad** en esa franja: lee precios y
+actualiza `state.json` e `historial.json`. Lo único que se aparta es el envío.
+
+Si durante la noche se hubiera disparado un aviso (bajada por encima del
+umbral, mínimo histórico, o un resumen), **no se pierde**: se guarda en la
+cola `pendientes` de `state.json` y se manda en la primera ejecución tras el
+fin del silencio, en **un solo push agrupado** con la hora a la que ocurrió
+cada uno. Se agrupan a propósito: ocho ejecuciones nocturnas podrían dejar
+varios avisos, y despertarte con una ráfaga de notificaciones a las 8 sería
+peor que el problema que resuelve el silencio.
+
+La hora es la de España, no la del runner. El runner corre en UTC y España
+cambia de huso dos veces al año, así que restar un número fijo de horas
+fallaría medio año. Se convierte con `zoneinfo` (de ahí `tzdata` en
+`requirements.txt`: Windows no trae la base de datos IANA).
+
+**Para cambiar la franja**, crea las variables en el repo — Settings →
+Secrets and variables → Actions → pestaña **Variables**:
+
+| Variable | Ejemplo | Qué hace |
+|---|---|---|
+| `SILENCIO_INICIO` | `23:30` | Hora local a la que empieza el silencio |
+| `SILENCIO_FIN` | `07:00` | Hora local a la que termina |
+| `ZONA_HORARIA` | `Europe/Madrid` | Zona IANA de referencia |
+
+La franja **puede cruzar la medianoche** (`23:00`–`08:00` funciona). El inicio
+es inclusivo y el fin exclusivo: con `08:00`, a las 08:00 en punto ya se
+envía. Para **desactivar** el silencio, pon el mismo valor en las dos
+(`SILENCIO_INICIO=00:00` y `SILENCIO_FIN=00:00`).
+
+En local, sin crear nada:
+
+```bash
+SILENCIO_INICIO=00:00 SILENCIO_FIN=00:00 python check_price.py
+```
+
+## Resúmenes
+
+- **Diario**: cada ~24 h, con mínimos y máximos de la ventana.
+- **Semanal**: cada ~7 días, lo mismo agregando la semana.
+
+Cuando toca el semanal **se omite el diario de esa ejecución**: contiene lo
+mismo con más recorrido, y mandar los dos seguidos sería repetirse. Los dos
+declaran la ventana **real** que cubren (`Ventana: 13.0 h, 15 muestras`), no
+"24 h" o "7 días" a secas: al principio el histórico todavía no llega.
 
 ## Vigilar más de un producto
 
@@ -188,6 +238,10 @@ saturar Eneba. Dos avisos de GitHub:
 | `UMBRAL_BAJADA_PCT` | No | % mínimo de bajada para alertar (def. 1.5) |
 | `UMBRAL_BAJADA_EUR` | No | Suelo en € para alertar (def. 0.10) |
 | `RETENCION_DIAS` | No | Días de histórico que se conservan (def. 30) |
+| `SILENCIO_INICIO` | No | Inicio del silencio, hora local (def. `00:00`) |
+| `SILENCIO_FIN` | No | Fin del silencio, hora local (def. `08:00`) |
+| `ZONA_HORARIA` | No | Zona IANA (def. `Europe/Madrid`) |
+| `DIAS_ENTRE_RESUMENES_SEMANALES` | No | Días entre semanales (def. 6.9) |
 | `ENEBA_URL` | No | Cambiar la página que se consulta (sin `page=`) |
 | `ENEBA_MAX_PAGINAS` | No | Tope de páginas a recorrer (por defecto 5) |
 | `PLAYWRIGHT_CHANNEL` | No | Forzar navegador: `chrome`, `msedge` |

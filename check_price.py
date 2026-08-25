@@ -4,11 +4,19 @@ Vigila precios de tarjetas regalo en Eneba y avisa por push (ntfy.sh).
 Los productos a vigilar se declaran en productos.json, no aqui: para anadir
 uno nuevo no hace falta tocar este archivo.
 
-Manda dos tipos de aviso:
+Manda tres tipos de aviso:
   - ALERTA: cuando baja el precio de una denominacion vigilada MAS QUE EL
-    UMBRAL configurado (para no dar la lata por dos centimos).
-  - RESUMEN: una vez al dia, con minimos y maximos de las ultimas 24h y la
-    tarjeta con mejor ratio de todo el catalogo del producto.
+    UMBRAL configurado (para no dar la lata por dos centimos), o cuando toca
+    su minimo historico.
+  - RESUMEN DIARIO: minimos y maximos de las ultimas 24h y la tarjeta con
+    mejor ratio de todo el catalogo del producto.
+  - RESUMEN SEMANAL: lo mismo agregando 7 dias. Cuando toca el semanal se
+    omite el diario de esa ejecucion: seria repetir lo mismo dos veces.
+
+Todos respetan el SILENCIO NOCTURNO: entre SILENCIO_INICIO y SILENCIO_FIN
+(hora de Espana) no se envia nada. La ejecucion sigue haciendose completa y
+lo que hubiera que avisar se encola para mandarlo de una vez al terminar la
+franja, para no perder una bajada ocurrida de madrugada.
 
 Como funciona, en corto:
   1. Abre la pagina con un navegador de verdad (Playwright), porque Eneba
@@ -100,6 +108,27 @@ RETENCION_DIAS = env_num("RETENCION_DIAS", 30, int)
 # cada dia hasta dar la vuelta al reloj.
 HORAS_ENTRE_RESUMENES = 23.5
 
+# Resumen semanal: misma idea, 7 dias. El margen es mayor (6.9 dias) por lo
+# mismo: que la hora no se vaya corriendo semana a semana.
+VENTANA_SEMANAL_HORAS = 24 * 7
+DIAS_ENTRE_RESUMENES_SEMANALES = env_num("DIAS_ENTRE_RESUMENES_SEMANALES", 6.9)
+
+# --- Silencio nocturno ---------------------------------------------------
+# Franja en la que NO se manda ningun push. El workflow sigue corriendo: lee
+# precios y guarda estado e historial con normalidad; solo se aparta el envio.
+#
+# La hora es de Espana, no del runner. El runner corre en UTC y Espana cambia
+# de offset dos veces al ano (+1 en invierno, +2 en verano), asi que restar un
+# numero fijo de horas fallaria medio ano. Se usa zoneinfo con la base de
+# datos IANA (paquete tzdata, en requirements.txt: Windows no la trae).
+ZONA_USUARIO = os.environ.get("ZONA_HORARIA", "Europe/Madrid")
+SILENCIO_INICIO = os.environ.get("SILENCIO_INICIO", "00:00").strip()
+SILENCIO_FIN = os.environ.get("SILENCIO_FIN", "08:00").strip()
+
+# Tope de avisos en cola. Si algo va mal y se acumulan, mejor perder los mas
+# viejos que guardar un state.json que crece sin control.
+MAX_PENDIENTES = 20
+
 AVISO_ORIENTATIVO = ("⚠️ Precio orientativo (servidor en EE.UU.), "
                      "verificar en Eneba antes de comprar.")
 
@@ -134,6 +163,46 @@ def guardar_json(ruta, datos):
     ruta.write_text(
         json.dumps(datos, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
+
+
+def hora_local(epoch):
+    """Convierte un epoch a la hora del usuario, respetando el cambio de
+    horario. Si no hay base de datos de zonas, cae a UTC avisando: es
+    preferible mandar un push a deshora que romper la ejecucion entera."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.fromtimestamp(epoch, ZoneInfo(ZONA_USUARIO))
+    except Exception as e:
+        print("Aviso: no se pudo usar la zona %s (%s). Uso UTC."
+              % (ZONA_USUARIO, e))
+        return datetime.fromtimestamp(epoch, timezone.utc)
+
+
+def _a_minutos(hhmm):
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def en_silencio(epoch):
+    """True si a esa hora local no se deben mandar push.
+
+    El inicio es inclusivo y el fin exclusivo: con 00:00-08:00, a las 08:00 en
+    punto ya se puede enviar. Se admite que la franja cruce la medianoche
+    (por ejemplo 23:00-08:00), de ahi las dos ramas.
+    """
+    try:
+        ini, fin = _a_minutos(SILENCIO_INICIO), _a_minutos(SILENCIO_FIN)
+    except ValueError:
+        print("Aviso: SILENCIO_INICIO/FIN mal formados ('%s', '%s'). "
+              "Desactivo el silencio." % (SILENCIO_INICIO, SILENCIO_FIN))
+        return False
+    if ini == fin:
+        return False  # franja vacia = silencio desactivado
+    ahora_local = hora_local(epoch)
+    minutos = ahora_local.hour * 60 + ahora_local.minute
+    if ini < fin:
+        return ini <= minutos < fin
+    return minutos >= ini or minutos < fin  # la franja cruza la medianoche
 
 
 def exportar_salida(clave, valor):
@@ -207,6 +276,72 @@ def notificar(titulo, cuerpo, prioridad="default", tags="moneybag",
         print("Push enviado a " + NTFY_SERVER + "/" + NTFY_TOPIC)
     except requests.RequestException as e:
         print("Error enviando el push: " + str(e))
+
+
+# --- Cola de avisos del silencio nocturno --------------------------------
+
+def enviar_o_encolar(estado, ahora, titulo, cuerpo, prioridad="default",
+                     tags="moneybag", url_accion=None):
+    """Manda el aviso, o lo guarda para despues si estamos en el silencio.
+
+    Encolar en vez de descartar: una bajada de madrugada sigue siendo una
+    bajada por la manana, y perderla seria justo lo que el proyecto quiere
+    evitar.
+    """
+    if not en_silencio(ahora):
+        notificar(titulo, cuerpo, prioridad, tags, url_accion)
+        return False
+
+    cola = estado.setdefault("pendientes", [])
+    cola.append({
+        "t": int(ahora),
+        "local": hora_local(ahora).strftime("%d/%m %H:%M"),
+        "titulo": titulo,
+        "cuerpo": cuerpo,
+        "prioridad": prioridad,
+        "tags": tags,
+        "url": url_accion,
+    })
+    if len(cola) > MAX_PENDIENTES:
+        del cola[:len(cola) - MAX_PENDIENTES]
+    print("  Silencio nocturno (%s hora local): aviso encolado (%d en cola)."
+          % (hora_local(ahora).strftime("%H:%M"), len(cola)))
+    return True
+
+
+def vaciar_cola(estado, ahora):
+    """Manda lo que quedo pendiente de la noche, en UN solo push.
+
+    Se agrupa a proposito: ocho ejecuciones nocturnas podrian dejar varios
+    avisos, y despertar al usuario con una rafaga de notificaciones a las 8
+    de la manana seria peor que el problema que resuelve el silencio.
+    """
+    cola = estado.get("pendientes") or []
+    if not cola or en_silencio(ahora):
+        return
+
+    if len(cola) == 1:
+        aviso = cola[0]
+        titulo = aviso["titulo"]
+        cuerpo = ("(Ocurrio durante el silencio nocturno, %s)\n\n%s"
+                  % (aviso["local"], aviso["cuerpo"]))
+    else:
+        titulo = "Eneba: %d avisos de la noche" % len(cola)
+        partes = ["Se retuvieron durante el silencio nocturno:", ""]
+        for aviso in cola:
+            partes.append("──── %s ────" % aviso["local"])
+            partes.append(aviso["cuerpo"])
+            partes.append("")
+        cuerpo = "\n".join(partes).rstrip()
+
+    # La prioridad mas alta de la cola manda, y el enlace del aviso mas
+    # reciente, que es el que refleja el precio actual.
+    prioridad = "high" if any(a.get("prioridad") == "high" for a in cola) else "default"
+    url = next((a["url"] for a in reversed(cola) if a.get("url")), None)
+
+    print("  Fin del silencio: envio %d aviso(s) retenido(s)." % len(cola))
+    notificar(titulo, cuerpo, prioridad, "night_with_stars", url)
+    estado["pendientes"] = []
 
 
 # --- Scraping ------------------------------------------------------------
@@ -400,20 +535,22 @@ def texto_dias(dias):
 
 # --- Mensajes ------------------------------------------------------------
 
-def construir_resumen(producto, muestras_24h, ofertas, enlaces, ahora):
-    """Cuerpo del push de resumen diario."""
+def construir_resumen(producto, muestras, ofertas, enlaces, ahora):
+    """Cuerpo de un push de resumen. Sirve para el diario y el semanal: lo
+    unico que cambia es la ventana de muestras que se le pasa."""
     unidad = producto.get("unidad", "")
     lineas = [producto["nombre"]]
 
-    if muestras_24h:
-        antigua = muestras_24h[0]
+    if muestras:
+        antigua = muestras[0]
         horas = (ahora - antigua["t"]) / 3600.0
     else:
         antigua, horas = None, 0.0
 
-    # Honestidad: el primer dia el historico no cubre 24h enteras, y el
-    # mensaje debe decir lo que cubre de verdad, no "24h" a secas.
-    lineas.append("Ventana: %.1f h, %d muestras" % (horas, len(muestras_24h)))
+    # Honestidad: al principio el historico no cubre la ventana entera, y el
+    # mensaje debe decir lo que cubre de verdad, no "24h" ni "7 dias" a secas.
+    cobertura = ("%.1f dias" % (horas / 24.0)) if horas >= 48 else ("%.1f h" % horas)
+    lineas.append("Ventana: %s, %d muestras" % (cobertura, len(muestras)))
     lineas.append("")
 
     for denom in producto["denominaciones_vigiladas"]:
@@ -422,7 +559,7 @@ def construir_resumen(producto, muestras_24h, ofertas, enlaces, ahora):
             lineas.append("%d %s: no encontrado ahora mismo" % (denom, unidad))
             continue
 
-        minimo, maximo = rango(muestras_24h, denom)
+        minimo, maximo = rango(muestras, denom)
         antes = antigua["precios"].get(str(denom)) if antigua else None
 
         if antes is None:
@@ -473,11 +610,12 @@ def procesar(producto, pagina, estado, historial, ahora):
         print("  No se ha podido extraer ninguna oferta. "
               "Probablemente Eneba cambio el HTML: revisa patron_titulo.")
         if not est.get("fallo_previo"):
-            notificar("Eneba tracker roto: %s" % pid,
-                      "No se pudo leer ningun precio de %s. Revisa "
-                      "patron_titulo en productos.json." % producto["nombre"],
-                      prioridad="high", tags="warning",
-                      url_accion=producto["url"], etiqueta_accion="Abrir Eneba")
+            enviar_o_encolar(estado, ahora, "Eneba tracker roto: %s" % pid,
+                             "No se pudo leer ningun precio de %s. Revisa "
+                             "patron_titulo en productos.json."
+                             % producto["nombre"],
+                             prioridad="high", tags="warning",
+                             url_accion=producto["url"])
         est["fallo_previo"] = True
         hist["muestras"] = muestras
         return False, False
@@ -567,9 +705,11 @@ def procesar(producto, pagina, estado, historial, ahora):
     if not anteriores:
         print("  Primera ejecucion de este producto: guardo estado, sin comparar.")
     elif hay_alerta:
-        notificar("Eneba: baja %s" % producto["nombre"], "\n".join(lineas),
-                  prioridad="high", tags="chart_with_downwards_trend",
-                  url_accion=url_boton)
+        enviar_o_encolar(estado, ahora,
+                         "Eneba: baja %s" % producto["nombre"],
+                         "\n".join(lineas), prioridad="high",
+                         tags="chart_with_downwards_trend",
+                         url_accion=url_boton)
     else:
         print("  Sin bajadas por encima del umbral. No envio alerta.")
 
@@ -585,24 +725,52 @@ def procesar(producto, pagina, estado, historial, ahora):
     })
     muestras.sort(key=lambda m: m["t"])
 
-    # --- Resumen diario --------------------------------------------------
+    # --- Resumenes: semanal y diario -------------------------------------
     resumen_enviado = False
+
+    ultimo_sem = est.get("ultimo_resumen_semanal")
+    toca_semanal = (ultimo_sem is not None
+                    and (ahora - ultimo_sem) >= DIAS_ENTRE_RESUMENES_SEMANALES * 86400)
+    if ultimo_sem is None:
+        print("  Sin resumen semanal previo: arranco el contador (~7 dias).")
+        est["ultimo_resumen_semanal"] = int(ahora)
+
+    if toca_semanal:
+        print("  Toca resumen SEMANAL (%.1f dias desde el ultimo)."
+              % ((ahora - ultimo_sem) / 86400.0))
+        cuerpo, url_res = construir_resumen(
+            producto, en_ventana(muestras, ahora, VENTANA_SEMANAL_HORAS),
+            ofertas, enlaces, ahora)
+        enviar_o_encolar(estado, ahora,
+                         "Eneba: resumen semanal — %s" % producto["nombre"],
+                         cuerpo, prioridad="default", tags="calendar",
+                         url_accion=url_res)
+        est["ultimo_resumen_semanal"] = int(ahora)
+        resumen_enviado = True
+        # El semanal contiene lo mismo que el diario con mas recorrido:
+        # mandar los dos seguidos seria repetirse. Se reinicia el contador
+        # del diario para que el siguiente salga dentro de ~24h.
+        est["ultimo_resumen"] = int(ahora)
+        print("  Diario omitido en esta ejecucion: el semanal ya lo cubre.")
+
     ultimo = est.get("ultimo_resumen")
     if ultimo is None:
         # Primera vez: no tiene sentido resumir 24h con una sola muestra.
         print("  Sin resumen previo: arranco el contador, el primero en ~24h.")
         est["ultimo_resumen"] = int(ahora)
-    elif (ahora - ultimo) >= HORAS_ENTRE_RESUMENES * 3600:
-        print("  Toca resumen (%.1f h desde el ultimo). Enviando."
+    elif not toca_semanal and (ahora - ultimo) >= HORAS_ENTRE_RESUMENES * 3600:
+        print("  Toca resumen diario (%.1f h desde el ultimo)."
               % ((ahora - ultimo) / 3600.0))
         cuerpo, url_res = construir_resumen(
             producto, en_ventana(muestras, ahora, VENTANA_RESUMEN_HORAS),
             ofertas, enlaces, ahora)
-        notificar("Eneba: resumen 24h — %s" % producto["nombre"], cuerpo,
-                  prioridad="default", tags="bar_chart", url_accion=url_res)
+        enviar_o_encolar(estado, ahora,
+                         "Eneba: resumen 24h — %s" % producto["nombre"],
+                         cuerpo, prioridad="default", tags="bar_chart",
+                         url_accion=url_res)
         est["ultimo_resumen"] = int(ahora)
         resumen_enviado = True
-    else:
+    elif not toca_semanal:
         print("  Resumen no toca todavia (faltan %.1f h)."
               % (HORAS_ENTRE_RESUMENES - (ahora - ultimo) / 3600.0))
 
@@ -640,6 +808,16 @@ def main():
     historial = migrar(leer_json(HISTORIAL_FILE, {}), "historial.json", id_principal)
     estado.setdefault("productos", {})
     historial.setdefault("productos", {})
+
+    # Lo primero, soltar lo que quedo retenido de la noche. Va antes de
+    # consultar precios para que un fallo del scraping no deje los avisos
+    # de madrugada atrapados un dia mas.
+    if en_silencio(ahora):
+        print("Silencio nocturno activo (%s-%s hora de %s; ahora son las %s)."
+              % (SILENCIO_INICIO, SILENCIO_FIN, ZONA_USUARIO,
+                 hora_local(ahora).strftime("%H:%M")))
+    else:
+        vaciar_cola(estado, ahora)
 
     todo_bien = True
     hubo_resumen = False
