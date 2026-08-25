@@ -10,6 +10,210 @@ Panel: https://charlesariza.github.io/eneba-tracker/
 
 ---
 
+## Entrada 014 — 2026-08-25 — Silencio nocturno con cola, y resumen semanal
+
+**Estado:** las dos tareas implementadas y verificadas **en CI**, no solo en
+local. Commits `780b070`, `6ea31f4` y siguientes.
+
+### 🔴 Segundo bug de "variable vacía", y este era silencioso
+
+El primer despliegue del silencio **falló sin fallar**, que es peor:
+
+```
+Aviso: SILENCIO_INICIO/FIN mal formados ('', ''). Desactivo el silencio.
+```
+
+Es la misma trampa de la entrada 010, pero aplicada a variables de texto: se
+arregló `env_num` para los números y se dejó `os.environ.get` para las
+cadenas. GitHub Actions inyecta `${{ vars.SILENCIO_INICIO }}` **como cadena
+vacía** cuando la variable no existe, así que el valor por defecto nunca
+entraba y **el silencio quedaba desactivado**.
+
+La diferencia con el bug anterior: aquel rompía el job en rojo y se veía. Este
+dejaba el sistema "funcionando" y mandando push de madrugada. Solo se detectó
+por leer el log de una ejecución real.
+
+Corregido con `env_txt`, gemelo de `env_num`. Verificado simulando el entorno:
+
+```
+SILENCIO_INICIO='' -> queda '00:00'   (antes quedaba '')
+09:03 UTC = 11:03 Madrid -> silencio = False
+02:00 UTC = 04:00 Madrid -> silencio = True
+```
+
+### Tarea 1 — silencio nocturno
+
+Franja **00:00–08:00 hora de España** por defecto. El workflow sigue
+corriendo entero: lee precios y actualiza estado e historial. Solo se aparta
+el envío.
+
+**La hora es local, no del runner.** El runner corre en UTC y España cambia
+de huso dos veces al año, así que restar un número fijo fallaría medio año.
+Se convierte con `zoneinfo` + `tzdata` (Windows no trae la base IANA; añadido
+a `requirements.txt`).
+
+Prueba unitaria, 14 casos, todos correctos. El par decisivo:
+
+```
+OK  22:30 UTC en INVIERNO = 23:30 local -> silencio = False
+OK  22:30 UTC en VERANO   = 00:30 local -> silencio = True
+```
+
+Mismo instante UTC, veredicto opuesto. Es exactamente lo que fallaría con un
+offset fijo. También cubiertos: los bordes (07:59 sí, 08:00 no), la franja
+que cruza medianoche (`23:00–08:00`) y la desactivación (inicio == fin).
+
+### La cola de avisos nocturnos
+
+Los avisos no se descartan: se guardan en `estado["pendientes"]` de
+`state.json` y salen en la primera ejecución tras el silencio.
+
+**Se mandan agrupados en UN solo push**, no uno por aviso. Ocho ejecuciones
+nocturnas pueden dejar varios, y despertar al usuario con una ráfaga de
+notificaciones a las 8 sería peor que el problema que el silencio resuelve.
+Con un solo aviso pendiente se manda tal cual con una nota; con varios, se
+listan con la hora de cada uno bajo un título "N avisos de la noche". La
+prioridad más alta de la cola manda, y el enlace es el del aviso más reciente
+(el que refleja el precio actual). Cola limitada a 20 para que `state.json` no
+crezca solo si algo va mal.
+
+### Tarea 2 — resumen semanal
+
+Reutiliza la misma función que el diario; lo único que cambia es la ventana
+(7 días). **Cuando toca el semanal se omite el diario de esa ejecución**: es
+la misma información con más recorrido y mandar los dos seguidos sería
+repetirse. El contador del diario se reinicia para que el siguiente salga
+~24 h después.
+
+El contador semanal **avanza aunque el aviso se encole**. Si no, durante las
+8 horas de silencio se regeneraría cada hora y llenaría la cola con ocho
+copias del mismo resumen.
+
+Aspecto exacto del resumen semanal (salida real de la prueba):
+
+```
+Steam Wallet Hong Kong
+Ventana: 13.0 h, 15 muestras
+
+100 HKD: ahora 10.57 € | min 10.57 | max 11.13 | baja 0.01
+200 HKD: ahora 21.23 € | min 21.23 | max 22.34 | igual
+500 HKD: ahora 52.76 € | min 52.76 | max 55.23 | baja 0.04
+
+Mejor tarjeta ahora mismo: 50 HKD — 9.62 HKD/€ (5.20 €)
+(34 denominaciones comparadas)
+
+⚠️ Precio orientativo (servidor en EE.UU.), verificar en Eneba antes de comprar.
+[boton] Comprar en Eneba -> .../steam-wallet-gift-card-50-hkd-...
+```
+
+Dice **"Ventana: 13.0 h"**, no "7 días": el histórico aún no llega. Es el
+mismo criterio de honestidad del resumen diario.
+
+### Las 4 pruebas pedidas
+
+**1. Ejecución dentro del silencio con bajada → no se envía, sí se guarda:**
+```
+Silencio nocturno activo (00:00-23:59 hora de Europe/Madrid; ahora son las 10:53).
+  100 HKD -> 10.57 EUR [BAJA 0.53 desde 11.10]
+  Silencio nocturno (10:53 hora local): aviso encolado (1 en cola).
+  Historial: 12 muestras
+avisos en cola: 1
+precios actualizados en state.json: {'100': 10.57, '200': 21.23, '500': 52.76}
+```
+
+**2. La alerta pendiente se envía al terminar el silencio** (probado con dos
+en cola, para validar también el agrupado):
+```
+Fin del silencio: envio 2 aviso(s) retenido(s).
+Se retuvieron durante el silencio nocturno:
+
+──── 25/08 10:53 ────
+[aviso completo]
+
+──── 25/08 10:54 ────
+[aviso completo]
+```
+
+**3. Resumen semanal forzado a 8 días → se dispara**, con el diario también
+vencido, y el diario se omite:
+```
+Toca resumen SEMANAL (8.0 dias desde el ultimo).
+[cuerpo del resumen semanal]
+Diario omitido en esta ejecucion: el semanal ya lo cubre.
+```
+
+**4. Semanal que toca durante el silencio → se pospone:**
+```
+Toca resumen SEMANAL (8.0 dias desde el ultimo).
+Silencio nocturno (10:57 hora local): aviso encolado (1 en cola).
+avisos en cola: 1 -> [25/08 10:57] Eneba: resumen semanal — Steam Wallet Hong Kong
+contador semanal reiniciado: si
+```
+
+### Verificación end-to-end en CI
+
+No bastaba con las pruebas locales: el bug de la variable vacía solo aparece
+en Actions. Se crearon las variables reales del repo, se commiteó una bajada
+forzada y se ejecutó.
+
+**Dentro del silencio** (run 32830000456):
+```
+Silencio nocturno activo (00:00-23:59 hora de Europe/Madrid; ahora son las 11:05).
+  100 HKD -> 11.12 EUR [BAJA 0.56 desde 11.68]
+  Silencio nocturno (11:05 hora local): aviso encolado (1 en cola).
+```
+El runner convirtió 09:05 UTC a 11:05 de Madrid (+2, CEST) y **no envió**.
+
+**Tras quitar las variables** (run 32830206134):
+```
+Fin del silencio: envio 1 aviso(s) retenido(s).
+Push enviado a https://ntfy.sh/***
+```
+
+Y lo que guardó el servidor de ntfy, es decir lo que llegó al móvil:
+
+```
+TITULO: Eneba: baja Steam Wallet Hong Kong
+
+(Ocurrio durante el silencio nocturno, 25/08 11:05)
+
+Steam Wallet Hong Kong
+100 HKD: 11.12 € (8.99 HKD/€) [BAJA 0.56 desde 11.68]
+200 HKD: 22.34 € (8.95 HKD/€) [BAJA 1.12 desde 23.46]
+500 HKD: 55.19 € (9.06 HKD/€) [BAJA 2.76 desde 57.95]
+Mejor ratio: 50 HKD (9.23 HKD/€)
+⚠️ Precio orientativo (servidor en EE.UU.), verificar en Eneba antes de comprar.
+boton: "Comprar en Eneba" -> ficha del producto
+```
+
+Las variables de prueba se borraron después: la franja vuelve a ser
+00:00–08:00.
+
+### Configuración
+
+Documentado en el README. Variables opcionales del repo (Settings → Secrets
+and variables → Actions → Variables): `SILENCIO_INICIO`, `SILENCIO_FIN`,
+`ZONA_HORARIA`, `DIAS_ENTRE_RESUMENES_SEMANALES`. Sin crearlas, valen los
+valores por defecto.
+
+### Pendiente
+
+- **Devolver el cron a `0 */2 * * *`** cuando el usuario dé por terminada la
+  fase de prueba. Sigue en `0 * * * *`, **pasando la noche a propósito** para
+  que el silencio y la cola se ejerciten con datos reales.
+- Suscribirse al topic rotado en la app, si aún no se hizo (entrada 012).
+
+### Concepto enseñado
+
+Hay dos clases de fallo, y la peor no es la ruidosa. El bug de la entrada 010
+tumbaba el job en rojo: molesto pero evidente. Este dejaba el sistema
+funcionando con una función apagada; nadie se habría enterado hasta preguntar
+por qué llegaban push a las 3 de la mañana. Cuando una función consiste en
+*no* hacer algo, hay que comprobar explícitamente que está activa, porque su
+ausencia no se nota.
+
+---
+
 ## Entrada 013 — 2026-08-25 — El panel es instalable como PWA con icono propio
 
 **Estado:** completado y verificado en la URL pública. Commits `dade8db` y el
