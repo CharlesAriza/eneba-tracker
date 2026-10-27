@@ -1,7 +1,7 @@
 {
   "productos": {
     "steam-hk": {
-      "ultimo_resumen": 1793029553,
+      "ultimo_resumen": 1793060090,
       "precios": {
         "100": 11.45,
         "200": 23.09,
@@ -23,24 +23,24 @@
         "100": 11.45,
         "110": 15.64,
         "120": 13.96,
-        "125": 17.03,
+        "125": 17.04,
         "150": 18.63,
-        "160": 18.6,
+        "160": 18.54,
         "175": 22.51,
         "200": 23.09,
-        "240": 27.89,
+        "240": 27.87,
         "250": 31.38,
-        "300": 34.89,
-        "400": 46.65,
+        "300": 34.85,
+        "400": 46.58,
         "500": 57.48,
         "550": 78.16,
         "600": 69.69,
         "650": 90.98,
         "750": 90.26,
-        "800": 108.96,
+        "800": 109.01,
         "850": 101.39,
-        "900": 127.95,
-        "950": 118.64,
+        "900": 128.0,
+        "950": 118.69,
         "1000": 116.19
       },
       "fallo_previo": false,
@@ -87,9 +87,19 @@
         "950": "https://www.eneba.com/steam-gift-card-steam-gift-card-950-hkd-steam-key-hong-kong",
         "1000": "https://www.eneba.com/steam-gift-card-steam-wallet-gift-card-1000-hkd-steam-key-hong-kong"
       },
-      "actualizado": "2026-10-26 20:56 UTC",
-      "ultimo_resumen_semanal": 1792459735
+      "actualizado": "2026-10-27 00:14 UTC",
+      "ultimo_resumen_semanal": 1793060090
     }
   },
-  "pendientes": []
+  "pendientes": [
+    {
+      "t": 1793060090,
+      "local": "27/10 01:14",
+      "titulo": "Eneba: resumen semanal — Steam Wallet Hong Kong",
+      "cuerpo": "Steam Wallet Hong Kong\nVentana: 6.9 dias, 40 muestras\n\n100 HKD: ahora 11.45 € | min 11.45 | max 11.45 | igual\n200 HKD: ahora 23.09 € | min 22.98 | max 23.19 | baja 0.05\n500 HKD: ahora 57.48 € | min 57.18 | max 57.69 | sube 0.22\n\nMejor tarjeta ahora mismo: 50 HKD — 8.76 HKD/€ (5.71 €)\n(34 denominaciones comparadas)\n\n⚠️ Precio orientativo (servidor en EE.UU.), verificar en Eneba antes de comprar.",
+      "prioridad": "default",
+      "tags": "calendar",
+      "url": "https://www.eneba.com/steam-gift-card-steam-wallet-gift-card-50-hkd-steam-key-hong-kong"
+    }
+  ]
 }
