@@ -1,11 +1,11 @@
 {
   "productos": {
     "steam-hk": {
-      "ultimo_resumen": 1793641382,
+      "ultimo_resumen": 1793665424,
       "precios": {
         "100": 11.45,
-        "200": 23.26,
-        "500": 57.68
+        "200": 22.87,
+        "500": 57.65
       },
       "todas": {
         "5": 0.62,
@@ -21,26 +21,26 @@
         "70": 8.94,
         "80": 9.08,
         "100": 11.45,
-        "110": 15.96,
+        "110": 15.97,
         "120": 13.92,
         "125": 16.96,
         "150": 18.79,
         "160": 18.52,
         "175": 22.21,
-        "200": 23.26,
+        "200": 22.87,
         "240": 27.84,
         "250": 31.06,
         "300": 34.75,
         "400": 46.26,
-        "500": 57.68,
+        "500": 57.65,
         "550": 77.6,
         "600": 69.28,
         "650": 90.98,
         "750": 90.26,
-        "800": 110.84,
+        "800": 110.95,
         "850": 101.59,
-        "900": 128.13,
-        "950": 118.35,
+        "900": 128.05,
+        "950": 118.44,
         "1000": 115.45
       },
       "fallo_previo": false,
@@ -87,9 +87,28 @@
         "950": "https://www.eneba.com/steam-gift-card-steam-gift-card-950-hkd-steam-key-hong-kong",
         "1000": "https://www.eneba.com/steam-gift-card-steam-wallet-gift-card-1000-hkd-steam-key-hong-kong"
       },
-      "actualizado": "2026-11-02 17:43 UTC",
-      "ultimo_resumen_semanal": 1793060090
+      "actualizado": "2026-11-03 00:23 UTC",
+      "ultimo_resumen_semanal": 1793665424
     }
   },
-  "pendientes": []
+  "pendientes": [
+    {
+      "t": 1793665424,
+      "local": "03/11 01:23",
+      "titulo": "Eneba: baja Steam Wallet Hong Kong",
+      "cuerpo": "Steam Wallet Hong Kong\n100 HKD: 11.45 € (8.73 HKD/€) [igual]\n200 HKD: 22.87 € (8.75 HKD/€) [BAJA 0.39 desde 23.26]\n500 HKD: 57.65 € (8.67 HKD/€) [baja 0.03 desde 57.68 (bajo umbral 0.87)]\nMejor ratio: 80 HKD (8.81 HKD/€)\n⚠️ Precio orientativo (servidor en EE.UU.), verificar en Eneba antes de comprar.",
+      "prioridad": "high",
+      "tags": "chart_with_downwards_trend",
+      "url": "https://www.eneba.com/steam-gift-card-steam-wallet-gift-card-200-hkd-steam-key-hong-kong"
+    },
+    {
+      "t": 1793665424,
+      "local": "03/11 01:23",
+      "titulo": "Eneba: resumen semanal — Steam Wallet Hong Kong",
+      "cuerpo": "Steam Wallet Hong Kong\nVentana: 6.8 dias, 30 muestras\n\n100 HKD: ahora 11.45 € | min 11.45 | max 11.45 | igual\n200 HKD: ahora 22.87 € | min 22.87 | max 23.69 | baja 0.34\n500 HKD: ahora 57.65 € | min 57.28 | max 58.09 | sube 0.37\n\nMejor tarjeta ahora mismo: 80 HKD — 8.81 HKD/€ (9.08 €)\n(34 denominaciones comparadas)\n\n⚠️ Precio orientativo (servidor en EE.UU.), verificar en Eneba antes de comprar.",
+      "prioridad": "default",
+      "tags": "calendar",
+      "url": "https://www.eneba.com/steam-gift-card-steam-wallet-gift-card-80-hkd-steam-key-hong-kong"
+    }
+  ]
 }
