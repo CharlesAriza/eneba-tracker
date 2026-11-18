@@ -10,14 +10,14 @@
       "todas": {
         "5": 1.07,
         "10": 1.92,
-        "15": 2.67,
+        "15": 2.65,
         "20": 3.95,
-        "25": 4.08,
-        "35": 6.22,
+        "25": 4.09,
+        "35": 6.25,
         "40": 4.55,
-        "45": 7.34,
+        "45": 7.36,
         "50": 5.81,
-        "60": 7.64,
+        "60": 7.61,
         "70": 8.93,
         "80": 9.09,
         "100": 11.45,
@@ -29,18 +29,18 @@
         "175": 22.6,
         "200": 22.79,
         "240": 28.37,
-        "250": 31.13,
+        "250": 31.15,
         "300": 35.42,
         "400": 47.16,
         "500": 57.29,
         "550": 79.08,
         "600": 70.61,
         "650": 90.98,
-        "750": 92.36,
-        "800": 115.81,
+        "750": 92.29,
+        "800": 115.89,
         "850": 102.04,
-        "900": 130.29,
-        "950": 137.53,
+        "900": 130.36,
+        "950": 137.6,
         "1000": 117.64
       },
       "fallo_previo": false,
@@ -87,19 +87,9 @@
         "950": "https://www.eneba.com/steam-gift-card-steam-gift-card-950-hkd-steam-key-hong-kong",
         "1000": "https://www.eneba.com/steam-gift-card-steam-wallet-gift-card-1000-hkd-steam-key-hong-kong"
       },
-      "actualizado": "2026-11-18 02:00 UTC",
+      "actualizado": "2026-11-18 10:00 UTC",
       "ultimo_resumen_semanal": 1794878900
     }
   },
-  "pendientes": [
-    {
-      "t": 1794967231,
-      "local": "18/11 03:00",
-      "titulo": "Eneba: resumen 24h — Steam Wallet Hong Kong",
-      "cuerpo": "Steam Wallet Hong Kong\nVentana: 16.0 h, 3 muestras\n\n100 HKD: ahora 11.45 € | min 11.45 | max 11.45 | igual\n200 HKD: ahora 22.79 € | min 22.79 | max 22.79 | igual\n500 HKD: ahora 57.29 € | min 57.29 | max 57.29 | igual\n\nMejor tarjeta ahora mismo: 80 HKD — 8.80 HKD/€ (9.09 €)\n(34 denominaciones comparadas)\n\n⚠️ Precio orientativo (servidor en EE.UU.), verificar en Eneba antes de comprar.",
-      "prioridad": "default",
-      "tags": "bar_chart",
-      "url": "https://www.eneba.com/steam-gift-card-steam-wallet-gift-card-80-hkd-steam-key-hong-kong"
-    }
-  ]
+  "pendientes": []
 }
